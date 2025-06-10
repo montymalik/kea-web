@@ -1,4 +1,4 @@
-// ReservationsTable.jsx - Reservations Table Component
+// ReservationsTable.jsx
 import React from 'react';
 import { formatMacAddress, formatExpiration } from '../utils/utils';
 import { Wifi, WifiOff } from 'lucide-react';
@@ -75,7 +75,9 @@ const ReservationsTable = ({ reservations, onOpenDetails }) => {
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                   {reservation.isActive && reservation.leaseInfo ? (
                     <span className="text-orange-600 font-medium">
-                      {formatExpiration(reservation.leaseInfo.expires_at)}
+                      {/* --- CHANGE THIS LINE --- */}
+                      {formatExpiration(reservation.leaseInfo)}
+                      {/* ------------------------- */}
                     </span>
                   ) : (
                     <span className="text-gray-400">-</span>

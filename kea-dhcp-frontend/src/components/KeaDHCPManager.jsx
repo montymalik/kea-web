@@ -1,23 +1,23 @@
 // KeaDHCPManager.jsx - Main Component (Refactored)
 import React, { useState, useEffect, useMemo } from 'react';
 import { api } from '../services/api';
-import { calculateIPStats, calculateLeaseStats, filterData, enrichReservationsWithLeaseStatus } from '../utils/utils';
+import { calculateIPStats, filterData, enrichReservationsWithLeaseStatus, calculateLeaseStats } from '../utils/utils';
 
 // Import all components
 import Header from './Header';
 import TabNavigation from './TabNavigation';
 import SearchBar from './SearchBar';
 import IPStats from './IPStats';
+import LeaseStats from './LeaseStats';
 import LeasesTable from './LeasesTable';
 import ReservationsTable from './ReservationsTable';
 import AddReservationModal from './AddReservationModal';
 import ReservationDetailsModal from './ReservationDetailsModal';
 import ModifyReservationModal from './ModifyReservationModal';
 import { DeleteConfirmationModal, ModifyConfirmationModal } from './ConfirmationModals';
-import LeaseStats from './LeaseStats';
 
 const KeaDHCPManager = () => {
-  // Sta:width: ,te management
+  // State management
   const [activeTab, setActiveTab] = useState('leases');
   const [leases, setLeases] = useState([]);
   const [reservations, setReservations] = useState([]);
@@ -45,8 +45,30 @@ const KeaDHCPManager = () => {
 
   // Computed values
   const ipStats = useMemo(() => calculateIPStats(reservations), [reservations]);
-  const leaseStats = useMemo(() => calculateLeaseStats(leases), [leases]);
-  const filteredLeases = useMemo(() => filterData(leases, searchTerm), [leases, searchTerm]);
+  
+  const leaseStats = useMemo(() => {
+    console.log('Calculating lease stats with:', leases.length, 'leases');
+    try {
+      const stats = calculateLeaseStats(leases);
+      console.log('Lease stats calculated:', stats);
+      return stats;
+    } catch (error) {
+      console.error('Error calculating lease stats:', error);
+      return {
+        total: 200,
+        active: 0,
+        available: 200,
+        status: 'Good'
+      };
+    }
+  }, [leases]);
+  
+  const filteredLeases = useMemo(() => {
+    console.log('Filtering leases:', leases.length, 'total leases, search term:', searchTerm);
+    const filtered = filterData(leases, searchTerm);
+    console.log('Filtered leases:', filtered.length);
+    return filtered;
+  }, [leases, searchTerm]);
   
   // Enrich reservations with lease status before filtering
   const enrichedReservations = useMemo(() => 
@@ -63,15 +85,46 @@ const KeaDHCPManager = () => {
     setLoading(true);
     try {
       const data = await api.fetchAllData();
-      if (data.leases) setLeases(data.leases);
-      if (data.reservations) setReservations(data.reservations);
-      if (data.subnets) setSubnets(data.subnets);
+      console.log('Raw API data:', data);
+      
+      if (data.leases) {
+        console.log('Setting leases:', data.leases.length, 'leases');
+        console.log('First lease in data.leases:', data.leases[0]);
+        setLeases(data.leases);
+      } else {
+        console.log('No leases data received');
+        setLeases([]);
+      }
+      
+      if (data.reservations) {
+        console.log('Setting reservations:', data.reservations.length, 'reservations');
+        setReservations(data.reservations);
+      } else {
+        console.log('No reservations data received');
+        setReservations([]);
+      }
+      
+      if (data.subnets) {
+        console.log('Setting subnets:', data.subnets.length, 'subnets');
+        setSubnets(data.subnets);
+      } else {
+        console.log('No subnets data received');
+        setSubnets([]);
+      }
     } catch (error) {
       console.error('Error fetching data:', error);
       alert('Error connecting to the server. Make sure the backend is running.');
     }
     setLoading(false);
   };
+
+  // Add debugging for state changes
+  useEffect(() => {
+    console.log('Leases state updated:', leases.length, 'leases');
+    if (leases.length > 0) {
+      console.log('First lease in state:', leases[0]);
+    }
+  }, [leases]);
 
   useEffect(() => {
     fetchData();
@@ -96,9 +149,9 @@ const KeaDHCPManager = () => {
   };
 
   // Reservation operations
-  const deleteReservation = async (hostId) => {
+  const deleteReservation = async (reservation) => {
     try {
-      const success = await api.deleteReservation(hostId);
+      const success = await api.deleteReservation(reservation);
       if (success) {
         await fetchData();
         closeAllModals();
@@ -132,9 +185,8 @@ const KeaDHCPManager = () => {
 
   const updateReservation = async () => {
     try {
-      // Delete old reservation and create new one
-      await api.deleteReservation(selectedReservation.host_id);
-      await api.createReservation(modifyData);
+      // Use the new update API instead of delete + create
+      await api.updateReservation(selectedReservation.host_id, modifyData);
       
       await fetchData();
       closeAllModals();
@@ -207,7 +259,7 @@ const KeaDHCPManager = () => {
           reservationsCount={reservations.length}
         />
 
-        {activeTab === 'leases' && <LeaseStats leaseStats={leaseStats} leases={filteredLeases} />}
+        {activeTab === 'leases' && leaseStats && <LeaseStats leaseStats={leaseStats} leases={filteredLeases} />}
         {activeTab === 'reservations' && <IPStats ipStats={ipStats} enrichedReservations={enrichedReservations} />}
 
         <SearchBar 
@@ -218,10 +270,20 @@ const KeaDHCPManager = () => {
         />
 
         {activeTab === 'leases' && (
-          <LeasesTable 
-            leases={filteredLeases}
-            onDeleteLease={deleteLease}
-          />
+          <>
+            {loading ? (
+              <div className="bg-white rounded-lg shadow p-8 text-center">
+                <div className="text-gray-500">Loading leases...</div>
+              </div>
+            ) : (
+              <>
+                <LeasesTable 
+                  leases={filteredLeases}
+                  onDeleteLease={deleteLease}
+                />
+              </>
+            )}
+          </>
         )}
 
         {activeTab === 'reservations' && (
@@ -262,7 +324,7 @@ const KeaDHCPManager = () => {
         <DeleteConfirmationModal
           show={showDeleteConfirm}
           reservation={selectedReservation}
-          onConfirm={() => deleteReservation(selectedReservation.host_id)}
+          onConfirm={() => deleteReservation(selectedReservation)}
           onCancel={() => setShowDeleteConfirm(false)}
         />
 

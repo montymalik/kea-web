@@ -3,16 +3,33 @@ import React from 'react';
 import { Activity, Timer } from 'lucide-react';
 
 const LeaseStats = ({ leaseStats, leases }) => {
+  // Handle undefined props gracefully
+  if (!leaseStats || !leases) {
+    return (
+      <div className="bg-white rounded-lg shadow p-4 mb-6">
+        <div className="flex items-center justify-center py-8">
+          <div className="text-gray-500">Loading lease statistics...</div>
+        </div>
+      </div>
+    );
+  }
+
   // Calculate lease status breakdown
   const activeLeases = leases.filter(lease => lease.status === 'Active').length;
   const expiredLeases = leases.filter(lease => lease.status !== 'Active').length;
   
   // Calculate expiring soon (within 24 hours)
-  const now = new Date();
+  const now = Math.floor(Date.now() / 1000); // Current Unix timestamp
   const expiringSoon = leases.filter(lease => {
-    const expireDate = new Date(lease.expires_at);
-    const diffHours = (expireDate - now) / (1000 * 60 * 60);
-    return diffHours > 0 && diffHours <= 24;
+    const cltt = lease.cltt;
+    const validLft = lease['valid-lft'];
+    
+    if (cltt !== undefined && validLft !== undefined) {
+      const expirationTime = cltt + validLft;
+      const remainingSeconds = expirationTime - now;
+      return remainingSeconds > 0 && remainingSeconds <= 86400; // Within 24 hours
+    }
+    return false;
   }).length;
 
   return (
