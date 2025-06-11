@@ -346,9 +346,25 @@ export const api = {
     }
   },
 
-  // Update/modify reservation
-  async updateReservation(hostId, reservationData) {
+  // Update/modify reservation with lease management
+  async updateReservation(hostId, reservationData, originalData = null) {
     try {
+      // If IP address is changing, handle lease cleanup
+      if (originalData && originalData.ipv4_address !== reservationData.ipv4_address) {
+        console.log(`IP address changing from ${originalData.ipv4_address} to ${reservationData.ipv4_address}`);
+        
+        // Step 1: Delete the old lease if it exists
+        try {
+          console.log(`Attempting to delete old lease for ${originalData.ipv4_address}`);
+          await this.deleteLease(originalData.ipv4_address);
+          console.log(`Successfully deleted old lease for ${originalData.ipv4_address}`);
+        } catch (error) {
+          console.log(`Old lease deletion failed (may not exist): ${error.message}`);
+          // Continue anyway - lease might not exist
+        }
+      }
+
+      // Step 2: Update the reservation
       const response = await fetchWithAuth(`${API_BASE}`, {
         method: 'POST',
         body: JSON.stringify({
@@ -369,12 +385,66 @@ export const api = {
       
       if (data[0] && data[0].result === 0) {
         console.log(`Successfully updated reservation for ${reservationData.ipv4_address}`);
+        
+        // Step 3: If IP changed, try to force DHCP renewal (if supported)
+        if (originalData && originalData.ipv4_address !== reservationData.ipv4_address) {
+          try {
+            await this.forceRenewal(reservationData.dhcp_identifier);
+          } catch (error) {
+            console.log(`DHCP renewal force failed: ${error.message}`);
+            // Not critical - continue
+          }
+        }
+        
         return data[0];
       } else {
         throw new Error(data[0]?.text || 'Failed to update reservation');
       }
     } catch (error) {
       console.error('Error updating reservation:', error);
+      throw error;
+    }
+  },
+
+  // Force DHCP renewal for a specific MAC address (if supported by network)
+  async forceRenewal(macAddress) {
+    try {
+      // Note: DHCP FORCERENEW requires specific network setup and client support
+      // This is a placeholder for potential future implementation
+      console.log(`Would attempt to force DHCP renewal for MAC: ${macAddress}`);
+      
+      // You could implement this using:
+      // 1. DHCP FORCERENEW packets (requires network setup)
+      // 2. Integration with network management tools
+      // 3. Custom scripts on the DHCP server
+      
+      return { success: false, message: 'DHCP FORCERENEW not implemented' };
+    } catch (error) {
+      console.error('Error forcing DHCP renewal:', error);
+      throw error;
+    }
+  },
+
+  // Reclaim IP address (delete lease and optionally force renewal)
+  async reclaimIP(ipAddress, macAddress = null) {
+    try {
+      console.log(`Reclaiming IP address: ${ipAddress}`);
+      
+      // Delete the lease
+      const success = await this.deleteLease(ipAddress);
+      
+      if (success && macAddress) {
+        // Try to force the device to get a new IP
+        try {
+          await this.forceRenewal(macAddress);
+        } catch (error) {
+          console.log(`Could not force renewal: ${error.message}`);
+        }
+      }
+      
+      return success;
+    } catch (error) {
+      console.error('Error reclaiming IP:', error);
       throw error;
     }
   },

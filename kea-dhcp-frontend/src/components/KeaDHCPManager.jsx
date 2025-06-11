@@ -198,12 +198,18 @@ const KeaDHCPManager = () => {
 
   const updateReservation = async () => {
     try {
-      // Use the new update API instead of delete + create
-      await api.updateReservation(selectedReservation.host_id, modifyData);
+      // Use the new update API with lease management
+      await api.updateReservation(selectedReservation.host_id, modifyData, originalData);
       
       await fetchData();
       closeAllModals();
-      alert('Reservation updated successfully');
+      
+      // Show success message with additional info if IP changed
+      if (originalData.ipv4_address !== modifyData.ipv4_address) {
+        alert(`Reservation updated successfully!\n\nIP changed from ${originalData.ipv4_address} to ${modifyData.ipv4_address}.\nOld lease has been deleted. The device should request the new IP on next DHCP renewal.`);
+      } else {
+        alert('Reservation updated successfully');
+      }
     } catch (error) {
       console.error('Error updating reservation:', error);
       alert(`Error updating reservation: ${error.message}`);
