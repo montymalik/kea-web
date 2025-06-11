@@ -1,125 +1,150 @@
-// ReservationDetailsModal.jsx - Reservation Details Modal Component
+// ReservationDetailsModal.jsx - Fixed to properly show lease expiration data
 import React from 'react';
-import { X, Trash2, Edit, Wifi, WifiOff, Clock } from 'lucide-react';
-import { formatExpiration } from '../utils/utils';
+import { X, Wifi, WifiOff, Clock } from 'lucide-react';
+import { formatExpiration, formatMacAddress } from '../utils/utils';
 
-const ReservationDetailsModal = ({ 
-  show, 
-  reservation, 
-  onClose, 
-  onDelete, 
-  onModify 
-}) => {
+const ReservationDetailsModal = ({ show, reservation, onClose, onDelete, onModify }) => {
   if (!show || !reservation) return null;
 
+  // Check if there's an active lease for this reservation
+  const hasActiveLease = reservation.isActive && reservation.leaseInfo;
+  
+  // Format expiration time and date for active leases
+  let formattedExpiration = 'N/A';
+  let expiresAtDate = 'N/A';
+  
+  if (hasActiveLease && reservation.leaseInfo) {
+    const lease = reservation.leaseInfo;
+    
+    // Format the relative expiration time (e.g., "2h 30m")
+    formattedExpiration = formatExpiration(lease);
+    
+    // Calculate the actual expiration date/time
+    const cltt = lease.cltt || lease['cltt'];
+    const validLft = lease['valid-lft'] || lease.valid_lft;
+    
+    if (cltt && validLft) {
+      const expirationTimestamp = (parseInt(cltt) + parseInt(validLft)) * 1000; // Convert to milliseconds
+      const expirationDate = new Date(expirationTimestamp);
+      
+      if (!isNaN(expirationDate.getTime())) {
+        expiresAtDate = expirationDate.toLocaleString();
+      }
+    }
+  }
+
   return (
-    <div className="fixed inset-0 bg-gray-600 bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-lg">
-        <div className="flex justify-between items-start mb-4">
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
+        {/* Header */}
+        <div className="flex items-center justify-between p-6 border-b border-gray-200">
           <h3 className="text-lg font-medium text-gray-900">Reservation Details</h3>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-600"
+            className="text-gray-400 hover:text-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50"
           >
-            <X className="h-5 w-5" />
+            <X className="h-6 w-6" />
           </button>
         </div>
-        
-        {/* Status Banner */}
-        <div className={`rounded-lg p-3 mb-4 ${
-          reservation.isActive 
-            ? 'bg-green-50 border border-green-200' 
-            : 'bg-gray-50 border border-gray-200'
-        }`}>
-          <div className="flex items-center space-x-2">
-            {reservation.isActive ? (
-              <>
-                <Wifi className="h-5 w-5 text-green-500" />
-                <span className="font-medium text-green-800">Active Lease</span>
-              </>
-            ) : (
-              <>
+
+        {/* Content */}
+        <div className="p-6 space-y-4">
+          {/* Lease Status Banner */}
+          <div className={`p-4 rounded-lg ${hasActiveLease ? 'bg-green-50 border border-green-200' : 'bg-gray-50 border border-gray-200'}`}>
+            <div className="flex items-center space-x-2">
+              {hasActiveLease ? (
+                <Wifi className="h-5 w-5 text-green-600" />
+              ) : (
                 <WifiOff className="h-5 w-5 text-gray-500" />
-                <span className="font-medium text-gray-700">Reserved (Not Active)</span>
-              </>
+              )}
+              <span className={`font-medium ${hasActiveLease ? 'text-green-800' : 'text-gray-700'}`}>
+                {hasActiveLease ? 'Active Lease' : 'Reserved Only'}
+              </span>
+            </div>
+            {hasActiveLease && (
+              <div className="flex items-center space-x-2 mt-2">
+                <Clock className="h-4 w-4 text-green-600" />
+                <span className="text-sm text-green-700">
+                  Expires in: {formattedExpiration}
+                </span>
+              </div>
             )}
           </div>
-          {reservation.isActive && reservation.leaseInfo && (
-            <div className="mt-2 flex items-center space-x-2 text-sm text-green-700">
-              <Clock className="h-4 w-4" />
-              <span>Expires in: {formatExpiration(reservation.leaseInfo.expires_at)}</span>
-            </div>
-          )}
-        </div>
-        
-        <div className="space-y-4">
+
+          {/* Basic Information */}
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-500">IP Address</label>
-              <p className="text-sm text-gray-900 font-mono">{reservation.ip_address}</p>
+              <label className="block text-sm font-medium text-gray-700">IP Address</label>
+              <p className="mt-1 text-sm text-gray-900">{reservation.ip_address}</p>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-500">MAC Address</label>
-              <p className="text-sm text-gray-900 font-mono">{reservation.mac_address}</p>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-500">Subnet ID</label>
-              <p className="text-sm text-gray-900">{reservation.subnet_id}</p>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-500">Host ID</label>
-              <p className="text-sm text-gray-900">{reservation.host_id}</p>
-            </div>
-            <div className="col-span-2">
-              <label className="block text-sm font-medium text-gray-500">Hostname</label>
-              <p className="text-sm text-gray-900">{reservation.hostname || 'N/A'}</p>
+              <label className="block text-sm font-medium text-gray-700">MAC Address</label>
+              <p className="mt-1 text-sm text-gray-900">{formatMacAddress(reservation.mac_address)}</p>
             </div>
           </div>
 
-          {/* Lease Information Section */}
-          {reservation.isActive && reservation.leaseInfo && (
-            <div className="border-t pt-4">
-              <h4 className="text-sm font-medium text-gray-900 mb-3">Active Lease Information</h4>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-500">Lease Status</label>
-                  <p className="text-sm text-gray-900">{reservation.leaseInfo.status}</p>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Subnet ID</label>
+              <p className="mt-1 text-sm text-gray-900">{reservation.subnet_id}</p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Host ID</label>
+              <p className="mt-1 text-sm text-gray-900">{reservation.host_id || 'N/A'}</p>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Hostname</label>
+            <p className="mt-1 text-sm text-gray-900">{reservation.hostname || 'N/A'}</p>
+          </div>
+
+          {/* Active Lease Information (only show if there's an active lease) */}
+          {hasActiveLease && (
+            <>
+              <hr className="border-gray-200" />
+              <div>
+                <h4 className="text-sm font-medium text-gray-900 mb-3">Active Lease Information</h4>
+                
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">Lease Status</label>
+                    <p className="mt-1 text-sm text-gray-900">Active</p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">Expires At</label>
+                    <p className="mt-1 text-sm text-gray-900">{expiresAtDate}</p>
+                  </div>
                 </div>
+
                 <div>
-                  <label className="block text-sm font-medium text-gray-500">Expires At</label>
-                  <p className="text-sm text-gray-900">
-                    {new Date(reservation.leaseInfo.expires_at).toLocaleString()}
+                  <label className="block text-sm font-medium text-gray-700">Lease Hostname</label>
+                  <p className="mt-1 text-sm text-gray-900">
+                    {reservation.leaseInfo.hostname || 'N/A'}
                   </p>
                 </div>
-                {reservation.leaseInfo.hostname && (
-                  <div className="col-span-2">
-                    <label className="block text-sm font-medium text-gray-500">Lease Hostname</label>
-                    <p className="text-sm text-gray-900">{reservation.leaseInfo.hostname}</p>
-                  </div>
-                )}
               </div>
-            </div>
+            </>
           )}
         </div>
-        
-        <div className="flex justify-end space-x-3 mt-6">
+
+        {/* Footer */}
+        <div className="flex justify-end space-x-3 px-6 py-4 bg-gray-50 rounded-b-lg">
           <button
             onClick={onDelete}
-            className="flex items-center space-x-2 px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-md hover:bg-red-700"
+            className="px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-opacity-50"
           >
-            <Trash2 className="h-4 w-4" />
-            <span>Delete</span>
+            🗑️ Delete
           </button>
           <button
             onClick={onModify}
-            className="flex items-center space-x-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700"
+            className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50"
           >
-            <Edit className="h-4 w-4" />
-            <span>Modify</span>
+            ✏️ Modify
           </button>
           <button
             onClick={onClose}
-            className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200"
+            className="px-4 py-2 bg-gray-300 text-gray-700 text-sm font-medium rounded-md hover:bg-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-opacity-50"
           >
             OK
           </button>
