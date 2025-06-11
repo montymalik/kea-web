@@ -180,10 +180,68 @@ export const api = {
         
         if (config.Dhcp4 && config.Dhcp4.subnet4) {
           config.Dhcp4.subnet4.forEach(subnet => {
+            console.log('Processing subnet from config:', JSON.stringify(subnet, null, 2));
+            
+            // Extract pool information for accurate IP counting
+            let pools = [];
+            if (subnet.pools && Array.isArray(subnet.pools)) {
+              console.log('Found pools in subnet:', subnet.pools);
+              
+              pools = subnet.pools.map(poolConfig => {
+                console.log('Processing pool config:', poolConfig);
+                
+                if (poolConfig.pool) {
+                  // Parse pool range - handle both formats:
+                  // "192.168.1.100 - 192.168.1.214" (with spaces)
+                  // "192.168.1.100-192.168.1.214" (without spaces)
+                  const poolRange = poolConfig.pool.trim();
+                  let startIP, endIP;
+                  
+                  // Try format with spaces first
+                  if (poolRange.includes(' - ')) {
+                    const parts = poolRange.split(' - ');
+                    if (parts.length === 2) {
+                      startIP = parts[0].trim();
+                      endIP = parts[1].trim();
+                    }
+                  } 
+                  // Try format without spaces
+                  else if (poolRange.includes('-')) {
+                    const parts = poolRange.split('-');
+                    if (parts.length === 2) {
+                      startIP = parts[0].trim();
+                      endIP = parts[1].trim();
+                    }
+                  }
+                  
+                  if (startIP && endIP) {
+                    console.log('Parsed pool range:', { poolRange, startIP, endIP });
+                    
+                    return {
+                      pool: poolRange,
+                      startIP: startIP,
+                      endIP: endIP
+                    };
+                  } else {
+                    console.warn('Could not parse pool format:', poolRange);
+                    return null;
+                  }
+                } else {
+                  console.log('Pool config missing pool property:', poolConfig);
+                  return null;
+                }
+              }).filter(p => p !== null);
+            } else {
+              console.log('No pools found in subnet or pools is not an array:', subnet.pools);
+            }
+            
+            console.log('Final pools for subnet:', pools);
+            
             subnets.push({
               // Normalize property names for consistency
               subnet_id: subnet.id,
               subnet_prefix: subnet.subnet,
+              pools: pools, // Add pool information
               // Keep original format for compatibility
               id: subnet.id,
               subnet: subnet.subnet
@@ -191,7 +249,7 @@ export const api = {
           });
         }
         
-        console.log(`Found ${subnets.length} subnets in configuration`);
+        console.log(`Found ${subnets.length} subnets in configuration with pool details:`, subnets);
         return subnets;
       } else {
         console.warn('config-get failed, using default subnet');
@@ -199,6 +257,11 @@ export const api = {
         return [{
           subnet_id: 1,
           subnet_prefix: '192.168.1.0/24',
+          pools: [{
+            pool: '192.168.1.100 - 192.168.1.214',
+            startIP: '192.168.1.100',
+            endIP: '192.168.1.214'
+          }],
           id: 1,
           subnet: '192.168.1.0/24'
         }];
@@ -209,6 +272,11 @@ export const api = {
       return [{
         subnet_id: 1,
         subnet_prefix: '192.168.1.0/24',
+        pools: [{
+          pool: '192.168.1.100 - 192.168.1.214',
+          startIP: '192.168.1.100',
+          endIP: '192.168.1.214'
+        }],
         id: 1,
         subnet: '192.168.1.0/24'
       }];
@@ -254,10 +322,12 @@ export const api = {
           "command": "reservation-add",
           "service": ["dhcp4"],
           "arguments": {
-            "subnet-id": parseInt(reservationData.subnet_id),
-            "ip-address": reservationData.ipv4_address,
-            "hw-address": reservationData.dhcp_identifier,
-            ...(reservationData.hostname && { "hostname": reservationData.hostname })
+            "reservation": {
+              "subnet-id": parseInt(reservationData.subnet_id),
+              "hw-address": reservationData.dhcp_identifier,
+              "ip-address": reservationData.ipv4_address,
+              ...(reservationData.hostname && { "hostname": reservationData.hostname })
+            }
           }
         })
       });
@@ -285,10 +355,12 @@ export const api = {
           "command": "reservation-update",
           "service": ["dhcp4"],
           "arguments": {
-            "subnet-id": parseInt(reservationData.subnet_id),
-            "ip-address": reservationData.ipv4_address,
-            ...(reservationData.hostname && { "hostname": reservationData.hostname }),
-            ...(reservationData.dhcp_identifier && { "hw-address": reservationData.dhcp_identifier })
+            "reservation": {
+              "subnet-id": parseInt(reservationData.subnet_id),
+              "hw-address": reservationData.dhcp_identifier,
+              "ip-address": reservationData.ipv4_address,
+              ...(reservationData.hostname && { "hostname": reservationData.hostname })
+            }
           }
         })
       });

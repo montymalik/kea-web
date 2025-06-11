@@ -1,4 +1,100 @@
-// utils.js - Complete and Corrected Utility Functions
+// utils.js - Updated with Pool-Based IP Calculation
+
+/**
+ * Converts an IP address string to a numeric value for comparison
+ * @param {string} ip - IP address like "192.168.1.100"
+ * @returns {number} - Numeric representation
+ */
+const ipToNumber = (ip) => {
+  if (!ip || typeof ip !== 'string') return 0;
+  const parts = ip.split('.');
+  if (parts.length !== 4) return 0;
+  
+  return parts.reduce((acc, octet) => {
+    const num = parseInt(octet, 10);
+    if (isNaN(num) || num < 0 || num > 255) return 0;
+    return (acc << 8) + num;
+  }, 0) >>> 0;
+};
+
+/**
+ * Calculates the number of IPs in a pool range
+ * @param {string} startIP - Starting IP address
+ * @param {string} endIP - Ending IP address
+ * @returns {number} - Number of IPs in the range (inclusive)
+ */
+export const calculatePoolSize = (startIP, endIP) => {
+  console.log('calculatePoolSize called with:', startIP, endIP);
+  
+  if (!startIP || !endIP) {
+    console.log('Missing start or end IP');
+    return 0;
+  }
+  
+  const start = ipToNumber(startIP);
+  const end = ipToNumber(endIP);
+  
+  console.log('IP conversion:', { startIP, endIP, start, end });
+  
+  if (start === 0 || end === 0 || end < start) {
+    console.log('Invalid IP range');
+    return 0;
+  }
+  
+  const count = end - start + 1; // +1 because range is inclusive
+  console.log('Pool size calculated:', count);
+  return count;
+};
+
+/**
+ * Calculates total IPs available from all pools in a subnet
+ * @param {Array} pools - Array of pool objects with startIP and endIP
+ * @returns {number} - Total number of IPs across all pools
+ */
+export const calculateTotalPoolIPs = (pools) => {
+  console.log('calculateTotalPoolIPs called with:', pools);
+  
+  if (!pools || !Array.isArray(pools)) {
+    console.log('No pools array provided');
+    return 0;
+  }
+  
+  const total = pools.reduce((total, pool) => {
+    console.log('Processing pool:', pool);
+    
+    if (pool && pool.startIP && pool.endIP) {
+      const poolSize = calculatePoolSize(pool.startIP, pool.endIP);
+      console.log(`Pool ${pool.startIP} - ${pool.endIP} has ${poolSize} IPs`);
+      return total + poolSize;
+    }
+    
+    console.log('Pool missing startIP or endIP:', pool);
+    return total;
+  }, 0);
+  
+  console.log('Total pool IPs calculated:', total);
+  return total;
+};
+
+/**
+ * Calculates the number of usable host IPs from a subnet CIDR notation (fallback)
+ * @param {string} subnetCidr - Subnet in CIDR format (e.g., "192.168.1.0/24")
+ * @returns {number} - Number of usable host IPs (excluding network and broadcast)
+ */
+export const calculateUsableIPs = (subnetCidr) => {
+    if (!subnetCidr || typeof subnetCidr !== 'string') return 0;
+    
+    const [, cidr] = subnetCidr.split('/');
+    const cidrNum = parseInt(cidr);
+    
+    if (isNaN(cidrNum) || cidrNum < 0 || cidrNum > 32) return 0;
+    
+    const hostBits = 32 - cidrNum;
+    const totalIPs = Math.pow(2, hostBits);
+    
+    // Subtract network address and broadcast address
+    return Math.max(0, totalIPs - 2);
+};
 
 /**
  * Formats the lease expiration time into a human-readable string (e.g., "5d 3h", "2h 30m", "Expired").
@@ -8,20 +104,13 @@
  * @returns {string} - The formatted expiration time or "Unknown" if data is missing/invalid.
  */
 export const formatExpiration = (lease) => {
-    // console.log('formatExpiration called with lease:', lease);
-    // console.log('lease type:', typeof lease);
-    // console.log('lease keys:', lease ? Object.keys(lease) : 'no keys');
-
     if (!lease) {
-        // console.log('Lease is null/undefined');
         return 'No Data';
     }
 
     // Extract cltt and valid-lft fields, checking both common variations (e.g., valid-lft vs valid_lft)
     const cltt = lease.cltt || lease['cltt'];
     const validLft = lease['valid-lft'] || lease.valid_lft;
-
-    // console.log('Found cltt:', cltt, 'validLft:', validLft);
 
     // Proceed with calculation ONLY if both cltt and validLft are available and valid
     if (cltt !== undefined && cltt !== null && validLft !== undefined && validLft !== null) {
@@ -30,20 +119,10 @@ export const formatExpiration = (lease) => {
 
         // Ensure parsing resulted in valid numbers
         if (isNaN(expirationTime) || isNaN(now)) {
-            // console.error('Invalid numerical values for expiration calculation:', { cltt, validLft, expirationTime, now });
             return 'Error Calc';
         }
 
         const remainingSeconds = expirationTime - now; // Time left in seconds
-
-        // console.log('Lease expiration calculation:', {
-        //     cltt: cltt,
-        //     validLft: validLft,
-        //     expirationTime: expirationTime,
-        //     now: now,
-        //     remainingSeconds: remainingSeconds,
-        //     remainingHours: remainingSeconds / 3600
-        // });
 
         if (remainingSeconds <= 0) {
             return 'Expired';
@@ -63,15 +142,6 @@ export const formatExpiration = (lease) => {
         }
         // If less than an hour, show only minutes
         return `${minutes}m`;
-
-    } else {
-        // This block executes if cltt or validLft were missing
-        // console.log('Missing required fields for expiration calculation:', {
-        //     cltt: cltt,
-        //     validLft: validLft,
-        //     clttUndefined: cltt === undefined,
-        //     validLftUndefined: validLft === undefined
-        // });
     }
 
     // Fallback if the calculation inputs are missing or parsing fails
@@ -89,63 +159,171 @@ export const formatMacAddress = (macAddress) => {
 };
 
 /**
- * Calculates statistics for IP reservations within a specific subnet (ID 1).
+ * Calculates statistics for IP reservations within a specific subnet using pool information.
  * @param {Array<object>} reservations - An array of reservation objects.
+ * @param {Array<object>} subnets - An array of subnet objects with pool information.
+ * @param {number} subnetId - The subnet ID to calculate stats for (default: 1).
  * @returns {object} - An object containing total, reserved, available IP counts and a status.
  */
-export const calculateIPStats = (reservations) => {
-    const subnet1Reservations = reservations.filter(r => {
-        const subnetId = r.subnet_id;
-        // Robust check for subnet_id being 1 (number or string)
-        return subnetId === 1 || subnetId === '1' || (typeof subnetId === 'string' && subnetId.trim() === '1');
+export const calculateIPStats = (reservations, subnets = [], subnetId = 1) => {
+    if (!reservations || !Array.isArray(reservations)) {
+        return {
+            total: 115, // Default for 192.168.1.100-214 range
+            reserved: 0,
+            available: 115,
+            status: 'Good',
+            poolInfo: 'Unknown'
+        };
+    }
+
+    const subnetReservations = reservations.filter(r => {
+        const rSubnetId = r.subnet_id;
+        // Robust check for subnet_id matching the target subnet
+        return rSubnetId === subnetId || rSubnetId === String(subnetId) || 
+               (typeof rSubnetId === 'string' && rSubnetId.trim() === String(subnetId));
     });
 
-    const totalScope = 99; // Define your total scope for subnet 1 here
-    const reservedIPs = subnet1Reservations.length;
+    // Find the subnet configuration to get the pool information
+    const subnet = subnets.find(s => 
+        s.subnet_id === subnetId || s.id === subnetId ||
+        s.subnet_id === String(subnetId) || s.id === String(subnetId)
+    );
+
+    let totalScope;
+    let poolInfo = 'Unknown';
+    
+    if (subnet && subnet.pools && subnet.pools.length > 0) {
+        // Calculate total IPs from all pools
+        totalScope = calculateTotalPoolIPs(subnet.pools);
+        
+        // Create a readable pool info string
+        const poolRanges = subnet.pools.map(pool => pool.pool).join(', ');
+        poolInfo = poolRanges;
+        
+        console.log(`Calculated ${totalScope} total IPs from pools: ${poolRanges}`);
+    } else if (subnet) {
+        // Fallback to CIDR calculation if no pools defined
+        const subnetCidr = subnet.subnet_prefix || subnet.subnet;
+        totalScope = calculateUsableIPs(subnetCidr);
+        poolInfo = `${subnetCidr} (full subnet)`;
+        console.log(`No pools found, calculated ${totalScope} usable IPs from CIDR: ${subnetCidr}`);
+    } else {
+        // Fallback to default if subnet not found
+        totalScope = 115; // Default for 192.168.1.100-214 (115 IPs)
+        poolInfo = '192.168.1.100 - 192.168.1.214 (default)';
+        console.warn(`Subnet ${subnetId} not found, using default pool scope of ${totalScope}`);
+    }
+
+    const reservedIPs = subnetReservations.length;
     const availableIPs = totalScope - reservedIPs;
-    const status = availableIPs < 20 ? 'Low' : availableIPs < 60 ? 'Moderate' : 'Good';
+    
+    // Calculate status based on percentage of available IPs
+    const availablePercentage = (availableIPs / totalScope) * 100;
+    const status = availablePercentage < 10 ? 'Low' : 
+                   availablePercentage < 30 ? 'Moderate' : 'Good';
 
     return {
         total: totalScope,
         reserved: reservedIPs,
         available: availableIPs,
-        status: status
+        status: status,
+        poolInfo: poolInfo
     };
 };
 
 /**
- * Calculates statistics for active leases within a specific subnet (ID 1).
+ * Calculates statistics for active leases within a specific subnet using pool information.
  * @param {Array<object>} leases - An array of lease objects.
+ * @param {Array<object>} subnets - An array of subnet objects with pool information.
+ * @param {number} subnetId - The subnet ID to calculate stats for (default: 1).
  * @returns {object} - An object containing total, active, available IP counts and a status.
  */
-export const calculateLeaseStats = (leases) => {
-    // Handle undefined or empty leases array
+export const calculateLeaseStats = (leases, subnets = [], subnetId = 1) => {
+    console.log('calculateLeaseStats called with:', {
+        leasesLength: leases ? leases.length : 'null',
+        subnetsLength: subnets ? subnets.length : 'null',
+        subnetId
+    });
+
+    // Handle undefined or empty leases array more gracefully
     if (!leases || !Array.isArray(leases)) {
+        console.log('No leases array provided, returning default');
         return {
-            total: 200, // Default total scope for leases
+            total: 115, // Default for 192.168.1.100-214 range
             active: 0,
-            available: 200,
-            status: 'Good'
+            available: 115,
+            status: 'Good',
+            poolInfo: 'Unknown'
         };
     }
 
-    const subnet1Leases = leases.filter(lease => {
-        const subnetId = lease.subnet_id || lease['subnet-id']; // Check both common key names
-        // Robust check for subnet_id being 1 (number or string)
-        return subnetId === 1 || subnetId === '1' || (typeof subnetId === 'string' && subnetId.trim() === '1');
+    // Filter leases for the specific subnet
+    const subnetLeases = leases.filter(lease => {
+        const lSubnetId = lease.subnet_id || lease['subnet-id']; // Check both common key names
+        const matches = lSubnetId === subnetId || lSubnetId === String(subnetId) || 
+               (typeof lSubnetId === 'string' && lSubnetId.trim() === String(subnetId));
+        
+        if (matches) {
+            console.log('Found matching lease for subnet:', lSubnetId, lease.ip_address);
+        }
+        return matches;
     });
 
-    const totalScope = 200; // Define your total scope for leases here
-    const activeLeases = subnet1Leases.length;
-    const availableIPs = totalScope - activeLeases;
-    const status = availableIPs < 40 ? 'Low' : availableIPs < 120 ? 'Moderate' : 'Good';
+    console.log(`Found ${subnetLeases.length} leases in subnet ${subnetId}`);
 
-    return {
+    // Find the subnet configuration - be more flexible about finding it
+    let subnet = null;
+    if (subnets && Array.isArray(subnets) && subnets.length > 0) {
+        subnet = subnets.find(s => 
+            s.subnet_id === subnetId || s.id === subnetId ||
+            s.subnet_id === String(subnetId) || s.id === String(subnetId)
+        );
+        console.log('Found subnet config:', subnet);
+    }
+
+    let totalScope;
+    let poolInfo = 'Unknown';
+    
+    if (subnet && subnet.pools && subnet.pools.length > 0) {
+        // Calculate total IPs from all pools
+        totalScope = calculateTotalPoolIPs(subnet.pools);
+        
+        // Create a readable pool info string
+        const poolRanges = subnet.pools.map(pool => pool.pool).join(', ');
+        poolInfo = poolRanges;
+        
+        console.log(`Calculated ${totalScope} total IPs from pools: ${poolRanges}`);
+    } else if (subnet) {
+        // Fallback to CIDR calculation if no pools defined
+        const subnetCidr = subnet.subnet_prefix || subnet.subnet;
+        totalScope = calculateUsableIPs(subnetCidr);
+        poolInfo = `${subnetCidr} (full subnet)`;
+        console.log(`No pools found, calculated ${totalScope} usable IPs from CIDR: ${subnetCidr}`);
+    } else {
+        // Fallback to default if subnet not found
+        totalScope = 115; // Default for 192.168.1.100-214 (115 IPs)
+        poolInfo = '192.168.1.100 - 192.168.1.214 (default)';
+        console.warn(`Subnet ${subnetId} not found for lease stats, using default pool scope of ${totalScope}`);
+    }
+
+    const activeLeases = subnetLeases.length;
+    const availableIPs = Math.max(0, totalScope - activeLeases); // Ensure non-negative
+    
+    // Calculate status based on percentage of available IPs
+    const availablePercentage = totalScope > 0 ? (availableIPs / totalScope) * 100 : 100;
+    const status = availablePercentage < 10 ? 'Low' : 
+                   availablePercentage < 30 ? 'Moderate' : 'Good';
+
+    const result = {
         total: totalScope,
         active: activeLeases,
         available: availableIPs,
-        status: status
+        status: status,
+        poolInfo: poolInfo
     };
+
+    console.log('calculateLeaseStats result:', result);
+    return result;
 };
 
 /**
@@ -156,13 +334,10 @@ export const calculateLeaseStats = (leases) => {
  * @returns {Array<object>} - The filtered array of items.
  */
 export const filterData = (data, searchTerm) => {
-    // console.log('filterData called with:', data.length, 'items, searchTerm:', `"${searchTerm}"`);
-
     const trimmedSearchTerm = searchTerm.trim();
 
     // If the search term is empty, return all data
     if (!trimmedSearchTerm) {
-        // console.log('No search term, returning all data');
         return data;
     }
 
@@ -184,7 +359,6 @@ export const filterData = (data, searchTerm) => {
         return ipMatch || hostnameMatch || macMatch;
     });
 
-    // console.log('filterData result:', filtered.length, 'items');
     return filtered;
 };
 

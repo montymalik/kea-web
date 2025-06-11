@@ -1,4 +1,4 @@
-// IPStats.jsx - IP Statistics Component
+// IPStats.jsx - IP Statistics Component with Pool-Based Calculation
 import React from 'react';
 import { Wifi, WifiOff } from 'lucide-react';
 
@@ -12,7 +12,9 @@ const IPStats = ({ ipStats, enrichedReservations }) => {
       <div className="flex items-center justify-between">
         <div>
           <h3 className="text-lg font-medium text-gray-900">Subnet 1 IP Status</h3>
-          <p className="text-sm text-gray-600">Range: 192.168.1.1 - 192.168.1.100</p>
+          <p className="text-sm text-gray-600">
+            Pool: {ipStats.poolInfo || 'Unknown'} ({ipStats.total} total IPs)
+          </p>
         </div>
         
         <div className="flex space-x-8 text-sm">

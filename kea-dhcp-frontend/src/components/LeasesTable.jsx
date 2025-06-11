@@ -1,22 +1,45 @@
-// LeasesTable.jsx - CORRECTED
+// LeasesTable.jsx - DEBUG VERSION
 import React from 'react';
 import { formatExpiration, formatMacAddress } from '../utils/utils';
 
 const LeasesTable = ({ leases, onDeleteLease }) => {
   console.log('LeasesTable received leases prop:', leases);
   console.log('LeasesTable received leases.length:', leases ? leases.length : 'null/undefined');
-  console.log('LeasesTable rendered with:', leases.length, 'leases'); // Keep this for overall count
-  console.log('Sample lease:', leases[0]); // Keep for first item inspection
-  console.log('First lease details:', JSON.stringify(leases[0], null, 2)); // Keep for detailed first item inspection
+  console.log('LeasesTable leases type:', typeof leases);
+  console.log('LeasesTable leases is Array:', Array.isArray(leases));
+  
+  if (leases && leases.length > 0) {
+    console.log('LeasesTable first 3 leases:', leases.slice(0, 3));
+  }
 
+  if (!leases) {
+    console.log('LeasesTable: leases is null/undefined');
+    return (
+      <div className="bg-white rounded-lg shadow p-4 text-center">
+        <p className="text-gray-600">No leases data received.</p>
+      </div>
+    );
+  }
 
-  if (!leases || leases.length === 0) {
+  if (!Array.isArray(leases)) {
+    console.log('LeasesTable: leases is not an array:', typeof leases);
+    return (
+      <div className="bg-white rounded-lg shadow p-4 text-center">
+        <p className="text-gray-600">Invalid leases data format.</p>
+      </div>
+    );
+  }
+
+  if (leases.length === 0) {
+    console.log('LeasesTable: leases array is empty');
     return (
       <div className="bg-white rounded-lg shadow p-4 text-center">
         <p className="text-gray-600">No active leases found.</p>
       </div>
     );
   }
+
+  console.log('LeasesTable: Rendering table with', leases.length, 'leases');
 
   return (
     <div className="overflow-x-auto bg-white rounded-lg shadow">
@@ -47,7 +70,10 @@ const LeasesTable = ({ leases, onDeleteLease }) => {
           </tr>
         </thead>
         <tbody className="bg-white divide-y divide-gray-200">
-          {leases.map((lease, index) => { // Added 'index' as a second argument for fallback key
+          {leases.map((lease, index) => {
+            // Debug each lease
+            console.log(`Processing lease ${index}:`, lease);
+            
             // Sanity check: Ensure lease is not undefined/null before proceeding
             if (!lease) {
               console.warn(`LeasesTable: Found an undefined or null lease object at index ${index}. Skipping.`);
@@ -59,6 +85,8 @@ const LeasesTable = ({ leases, onDeleteLease }) => {
 
             // Determine status styling
             const statusColor = lease.status === 'Active' ? 'text-green-800 bg-green-100' : 'text-gray-800 bg-gray-100';
+
+            console.log(`Rendering lease row ${index} with key ${rowKey}`);
 
             return (
               <tr key={rowKey}>
@@ -80,7 +108,7 @@ const LeasesTable = ({ leases, onDeleteLease }) => {
                   </span>
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                  {formatExpiration(lease)} {/* Now 'lease' should consistently be an object */}
+                  {formatExpiration(lease)}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                   <button

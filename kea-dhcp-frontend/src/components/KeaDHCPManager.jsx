@@ -1,4 +1,4 @@
-// KeaDHCPManager.jsx - Main Component (Refactored)
+// KeaDHCPManager.jsx - Updated to use programmatic subnet calculation
 import React, { useState, useEffect, useMemo } from 'react';
 import { api } from '../services/api';
 import { calculateIPStats, filterData, enrichReservationsWithLeaseStatus, calculateLeaseStats } from '../utils/utils';
@@ -43,25 +43,30 @@ const KeaDHCPManager = () => {
     hostname: ''
   });
 
-  // Computed values
-  const ipStats = useMemo(() => calculateIPStats(reservations), [reservations]);
+  // Computed values - NOW PASSING SUBNETS DATA
+  const ipStats = useMemo(() => {
+    console.log('Calculating IP stats with subnets:', subnets);
+    return calculateIPStats(reservations, subnets, 1); // Subnet ID 1
+  }, [reservations, subnets]);
   
   const leaseStats = useMemo(() => {
-    console.log('Calculating lease stats with:', leases.length, 'leases');
+    console.log('Calculating lease stats with:', leases.length, 'leases and subnets:', subnets.length, 'subnets');
+    
     try {
-      const stats = calculateLeaseStats(leases);
+      const stats = calculateLeaseStats(leases, subnets, 1); // Subnet ID 1
       console.log('Lease stats calculated:', stats);
       return stats;
     } catch (error) {
       console.error('Error calculating lease stats:', error);
       return {
-        total: 200,
+        total: 254,
         active: 0,
-        available: 200,
-        status: 'Good'
+        available: 254,
+        status: 'Good',
+        subnetCidr: 'Unknown'
       };
     }
-  }, [leases]);
+  }, [leases, subnets]);
   
   const filteredLeases = useMemo(() => {
     console.log('Filtering leases:', leases.length, 'total leases, search term:', searchTerm);
@@ -106,6 +111,7 @@ const KeaDHCPManager = () => {
       
       if (data.subnets) {
         console.log('Setting subnets:', data.subnets.length, 'subnets');
+        console.log('Subnet details:', data.subnets);
         setSubnets(data.subnets);
       } else {
         console.log('No subnets data received');
@@ -125,6 +131,13 @@ const KeaDHCPManager = () => {
       console.log('First lease in state:', leases[0]);
     }
   }, [leases]);
+
+  useEffect(() => {
+    console.log('Subnets state updated:', subnets.length, 'subnets');
+    if (subnets.length > 0) {
+      console.log('First subnet in state:', subnets[0]);
+    }
+  }, [subnets]);
 
   useEffect(() => {
     fetchData();
@@ -276,12 +289,10 @@ const KeaDHCPManager = () => {
                 <div className="text-gray-500">Loading leases...</div>
               </div>
             ) : (
-              <>
-                <LeasesTable 
-                  leases={filteredLeases}
-                  onDeleteLease={deleteLease}
-                />
-              </>
+              <LeasesTable 
+                leases={filteredLeases}
+                onDeleteLease={deleteLease}
+              />
             )}
           </>
         )}
