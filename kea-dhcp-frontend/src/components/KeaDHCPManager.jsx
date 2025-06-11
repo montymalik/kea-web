@@ -13,6 +13,7 @@ import ReservationsTable from './ReservationsTable';
 import AddReservationModal from './AddReservationModal';
 import ReservationDetailsModal from './ReservationDetailsModal';
 import ModifyReservationModal from './ModifyReservationModal';
+import HAStatusModal from './HAStatusModal';
 import { DeleteConfirmationModal, ModifyConfirmationModal } from './ConfirmationModals';
 
 const KeaDHCPManager = () => {
@@ -21,6 +22,7 @@ const KeaDHCPManager = () => {
   const [leases, setLeases] = useState([]);
   const [reservations, setReservations] = useState([]);
   const [subnets, setSubnets] = useState([]);
+  const [haStatus, setHaStatus] = useState(null); // ADD THIS LINE
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
     
@@ -31,6 +33,7 @@ const KeaDHCPManager = () => {
   const [showModifyCard, setShowModifyCard] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showModifyConfirm, setShowModifyConfirm] = useState(false);
+  const [showHAStatusModal, setShowHAStatusModal] = useState(false); // ADD THIS LINE
     
   // Form data states
   const [modifyData, setModifyData] = useState({});
@@ -91,13 +94,11 @@ const KeaDHCPManager = () => {
       // Fetch both primary data and HA status concurrently
       const [allData, haStatusData] = await Promise.all([
         api.fetchAllData(),
-        api.getHAStatus() // <-- THIS IS THE ADDED CALL
+        api.getHAStatus()
       ]);
 
-      // You can log the HA status data here if you want to see it in KeaDHCPManager logs,
-      // but api.js already has extensive logging for it.
       console.log('Raw API data (leases, reservations, subnets):', allData);
-      // console.log('HA Status data received:', haStatusData); // Optional: uncomment if you want to log it here
+      console.log('HA Status data received:', haStatusData);
 
       if (allData.leases) {
         console.log('Setting leases:', allData.leases.length, 'leases');
@@ -124,6 +125,15 @@ const KeaDHCPManager = () => {
         console.log('No subnets data received');
         setSubnets([]);
       }
+
+      // SET HA STATUS IN STATE
+      if (haStatusData) {
+        console.log('Setting HA status:', haStatusData);
+        setHaStatus(haStatusData);
+      } else {
+        console.log('No HA status data received');
+        setHaStatus(null);
+      }
     } catch (error) {
       console.error('Error fetching data or HA status:', error);
       alert('Error connecting to the server. Make sure the backend is running and check HA status.');
@@ -146,9 +156,32 @@ const KeaDHCPManager = () => {
     }
   }, [subnets]);
 
+  // ADD DEBUGGING FOR HA STATUS STATE CHANGES
+  useEffect(() => {
+    console.log('HA Status state updated:', haStatus);
+  }, [haStatus]);
+
   useEffect(() => {
     fetchData();
   }, []);
+
+  // HA STATUS HANDLERS
+  const handleHAStatusClick = () => {
+    console.log('HA Status clicked, current status:', haStatus);
+    setShowHAStatusModal(true);
+  };
+
+  const refreshHAStatus = async () => {
+    try {
+      console.log('Refreshing HA status...');
+      const haStatusData = await api.getHAStatus();
+      console.log('Refreshed HA status:', haStatusData);
+      setHaStatus(haStatusData);
+    } catch (error) {
+      console.error('Error refreshing HA status:', error);
+      alert('Error refreshing HA status');
+    }
+  };
 
   // Lease operations
   const deleteLease = async (ipAddress) => {
@@ -266,6 +299,7 @@ const KeaDHCPManager = () => {
     setShowModifyCard(false);
     setShowDeleteConfirm(false);
     setShowModifyConfirm(false);
+    setShowHAStatusModal(false); // ADD THIS LINE
     setSelectedReservation(null);
   };
 
@@ -285,8 +319,22 @@ const KeaDHCPManager = () => {
           reservationsCount={reservations.length}
         />
 
-        {activeTab === 'leases' && leaseStats && <LeaseStats leaseStats={leaseStats} leases={filteredLeases} />}
-        {activeTab === 'reservations' && <IPStats ipStats={ipStats} enrichedReservations={enrichedReservations} />}
+        {activeTab === 'leases' && leaseStats && (
+          <LeaseStats 
+            leaseStats={leaseStats} 
+            leases={filteredLeases}
+            haStatus={haStatus}
+            onHAStatusClick={handleHAStatusClick}
+          />
+        )}
+        {activeTab === 'reservations' && (
+          <IPStats 
+            ipStats={ipStats} 
+            enrichedReservations={enrichedReservations}
+            haStatus={haStatus}
+            onHAStatusClick={handleHAStatusClick}
+          />
+        )}
 
         <SearchBar 
           searchTerm={searchTerm}
@@ -343,6 +391,13 @@ const KeaDHCPManager = () => {
           subnets={subnets}
           onClose={closeAllModals}
           onSubmit={handleModifySubmit}
+        />
+
+        <HAStatusModal
+          show={showHAStatusModal}
+          haStatus={haStatus}
+          onClose={() => setShowHAStatusModal(false)}
+          onRefresh={refreshHAStatus}
         />
 
         <DeleteConfirmationModal
