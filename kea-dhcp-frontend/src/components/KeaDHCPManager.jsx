@@ -1,4 +1,3 @@
-// KeaDHCPManager.jsx - Updated to use programmatic subnet calculation
 import React, { useState, useEffect, useMemo } from 'react';
 import { api } from '../services/api';
 import { calculateIPStats, filterData, enrichReservationsWithLeaseStatus, calculateLeaseStats } from '../utils/utils';
@@ -24,7 +23,7 @@ const KeaDHCPManager = () => {
   const [subnets, setSubnets] = useState([]);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  
+    
   // Modal states
   const [showAddForm, setShowAddForm] = useState(false);
   const [selectedReservation, setSelectedReservation] = useState(null);
@@ -32,7 +31,7 @@ const KeaDHCPManager = () => {
   const [showModifyCard, setShowModifyCard] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showModifyConfirm, setShowModifyConfirm] = useState(false);
-  
+    
   // Form data states
   const [modifyData, setModifyData] = useState({});
   const [originalData, setOriginalData] = useState({});
@@ -48,7 +47,7 @@ const KeaDHCPManager = () => {
     console.log('Calculating IP stats with subnets:', subnets);
     return calculateIPStats(reservations, subnets, 1); // Subnet ID 1
   }, [reservations, subnets]);
-  
+    
   const leaseStats = useMemo(() => {
     console.log('Calculating lease stats with:', leases.length, 'leases and subnets:', subnets.length, 'subnets');
     
@@ -67,14 +66,14 @@ const KeaDHCPManager = () => {
       };
     }
   }, [leases, subnets]);
-  
+    
   const filteredLeases = useMemo(() => {
     console.log('Filtering leases:', leases.length, 'total leases, search term:', searchTerm);
     const filtered = filterData(leases, searchTerm);
     console.log('Filtered leases:', filtered.length);
     return filtered;
   }, [leases, searchTerm]);
-  
+    
   // Enrich reservations with lease status before filtering
   const enrichedReservations = useMemo(() => 
     enrichReservationsWithLeaseStatus(reservations, leases), 
@@ -89,37 +88,45 @@ const KeaDHCPManager = () => {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const data = await api.fetchAllData();
-      console.log('Raw API data:', data);
-      
-      if (data.leases) {
-        console.log('Setting leases:', data.leases.length, 'leases');
-        console.log('First lease in data.leases:', data.leases[0]);
-        setLeases(data.leases);
+      // Fetch both primary data and HA status concurrently
+      const [allData, haStatusData] = await Promise.all([
+        api.fetchAllData(),
+        api.getHAStatus() // <-- THIS IS THE ADDED CALL
+      ]);
+
+      // You can log the HA status data here if you want to see it in KeaDHCPManager logs,
+      // but api.js already has extensive logging for it.
+      console.log('Raw API data (leases, reservations, subnets):', allData);
+      // console.log('HA Status data received:', haStatusData); // Optional: uncomment if you want to log it here
+
+      if (allData.leases) {
+        console.log('Setting leases:', allData.leases.length, 'leases');
+        console.log('First lease in allData.leases:', allData.leases[0]);
+        setLeases(allData.leases);
       } else {
         console.log('No leases data received');
         setLeases([]);
       }
-      
-      if (data.reservations) {
-        console.log('Setting reservations:', data.reservations.length, 'reservations');
-        setReservations(data.reservations);
+        
+      if (allData.reservations) {
+        console.log('Setting reservations:', allData.reservations.length, 'reservations');
+        setReservations(allData.reservations);
       } else {
         console.log('No reservations data received');
         setReservations([]);
       }
-      
-      if (data.subnets) {
-        console.log('Setting subnets:', data.subnets.length, 'subnets');
-        console.log('Subnet details:', data.subnets);
-        setSubnets(data.subnets);
+        
+      if (allData.subnets) {
+        console.log('Setting subnets:', allData.subnets.length, 'subnets');
+        console.log('Subnet details:', allData.subnets);
+        setSubnets(allData.subnets);
       } else {
         console.log('No subnets data received');
         setSubnets([]);
       }
     } catch (error) {
-      console.error('Error fetching data:', error);
-      alert('Error connecting to the server. Make sure the backend is running.');
+      console.error('Error fetching data or HA status:', error);
+      alert('Error connecting to the server. Make sure the backend is running and check HA status.');
     }
     setLoading(false);
   };
@@ -269,7 +276,7 @@ const KeaDHCPManager = () => {
   return (
     <div className="min-h-screen bg-gray-50">
       <Header loading={loading} onRefresh={fetchData} />
-      
+        
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <TabNavigation 
           activeTab={activeTab} 

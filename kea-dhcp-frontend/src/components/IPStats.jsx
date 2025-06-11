@@ -1,8 +1,9 @@
-// IPStats.jsx - IP Statistics Component with Pool-Based Calculation
+// IPStats.jsx - IP Statistics Component with HA Status Monitoring
 import React from 'react';
 import { Wifi, WifiOff } from 'lucide-react';
+import HAStatusIndicator from './HAStatusIndicator';
 
-const IPStats = ({ ipStats, enrichedReservations }) => {
+const IPStats = ({ ipStats, enrichedReservations, haStatus, onHAStatusClick }) => {
   // Calculate active vs reserved counts
   const activeReservations = enrichedReservations.filter(r => r.isActive).length;
   const inactiveReservations = enrichedReservations.filter(r => !r.isActive).length;
@@ -42,20 +43,31 @@ const IPStats = ({ ipStats, enrichedReservations }) => {
         </div>
       </div>
       
-      {/* Lease Activity Summary */}
+      {/* Lease Activity Summary with HA Status */}
       <div className="mt-4 pt-4 border-t border-gray-200">
         <div className="flex items-center justify-between">
-          <h4 className="text-sm font-medium text-gray-700">Reservation Activity</h4>
-          <div className="flex space-x-6 text-sm">
-            <div className="flex items-center space-x-1">
-              <Wifi className="h-4 w-4 text-green-500" />
-              <span className="font-medium text-green-600">{activeReservations}</span>
-              <span className="text-gray-500">Active</span>
+          <h4 className="text-sm font-medium text-gray-700">System Status</h4>
+          <div className="flex items-center space-x-6">
+            {/* Reservation Activity */}
+            <div className="flex space-x-4 text-sm">
+              <div className="flex items-center space-x-1">
+                <Wifi className="h-4 w-4 text-green-500" />
+                <span className="font-medium text-green-600">{activeReservations}</span>
+                <span className="text-gray-500">Active</span>
+              </div>
+              <div className="flex items-center space-x-1">
+                <WifiOff className="h-4 w-4 text-gray-400" />
+                <span className="font-medium text-gray-600">{inactiveReservations}</span>
+                <span className="text-gray-500">Reserved Only</span>
+              </div>
             </div>
-            <div className="flex items-center space-x-1">
-              <WifiOff className="h-4 w-4 text-gray-400" />
-              <span className="font-medium text-gray-600">{inactiveReservations}</span>
-              <span className="text-gray-500">Reserved Only</span>
+            
+            {/* HA Status Indicator */}
+            <div className="border-l border-gray-300 pl-4">
+              <HAStatusIndicator 
+                haStatus={haStatus} 
+                onClick={onHAStatusClick}
+              />
             </div>
           </div>
         </div>
