@@ -1,8 +1,9 @@
 // LeaseStats.jsx - Lease Statistics Component with Pool-Based Calculation
 import React from 'react';
 import { Activity, Timer } from 'lucide-react';
+import HAStatusIndicator from './HAStatusIndicator';
 
-const LeaseStats = ({ leaseStats, leases }) => {
+const LeaseStats = ({ leaseStats, leases, haStatus, onHAStatusClick }) => {
   // Handle undefined props gracefully
   if (!leaseStats || !leases) {
     return (
@@ -67,28 +68,39 @@ const LeaseStats = ({ leaseStats, leases }) => {
         </div>
       </div>
       
-      {/* Lease Activity Summary */}
+      {/* Lease Activity Summary with HA Status */}
       <div className="mt-4 pt-4 border-t border-gray-200">
         <div className="flex items-center justify-between">
-          <h4 className="text-sm font-medium text-gray-700">Lease Activity</h4>
-          <div className="flex space-x-6 text-sm">
-            <div className="flex items-center space-x-1">
-              <Activity className="h-4 w-4 text-green-500" />
-              <span className="font-medium text-green-600">{activeLeases}</span>
-              <span className="text-gray-500">Active</span>
-            </div>
-            <div className="flex items-center space-x-1">
-              <Timer className="h-4 w-4 text-orange-500" />
-              <span className="font-medium text-orange-600">{expiringSoon}</span>
-              <span className="text-gray-500">Expiring Soon</span>
-            </div>
-            {expiredLeases > 0 && (
+          <h4 className="text-sm font-medium text-gray-700">System Status</h4>
+          <div className="flex items-center space-x-6">
+            {/* Lease Activity */}
+            <div className="flex space-x-4 text-sm">
               <div className="flex items-center space-x-1">
-                <div className="h-4 w-4 rounded-full bg-red-500"></div>
-                <span className="font-medium text-red-600">{expiredLeases}</span>
-                <span className="text-gray-500">Expired</span>
+                <Activity className="h-4 w-4 text-green-500" />
+                <span className="font-medium text-green-600">{activeLeases}</span>
+                <span className="text-gray-500">Active</span>
               </div>
-            )}
+              <div className="flex items-center space-x-1">
+                <Timer className="h-4 w-4 text-orange-500" />
+                <span className="font-medium text-orange-600">{expiringSoon}</span>
+                <span className="text-gray-500">Expiring Soon</span>
+              </div>
+              {expiredLeases > 0 && (
+                <div className="flex items-center space-x-1">
+                  <div className="h-4 w-4 rounded-full bg-red-500"></div>
+                  <span className="font-medium text-red-600">{expiredLeases}</span>
+                  <span className="text-gray-500">Expired</span>
+                </div>
+              )}
+            </div>
+            
+            {/* HA Status Indicator */}
+            <div className="border-l border-gray-300 pl-4">
+              <HAStatusIndicator 
+                haStatus={haStatus} 
+                onClick={onHAStatusClick}
+              />
+            </div>
           </div>
         </div>
       </div>

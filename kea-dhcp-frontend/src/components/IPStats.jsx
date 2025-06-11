@@ -1,9 +1,8 @@
-// IPStats.jsx - IP Statistics Component with HA Status Monitoring
+// IPStats.jsx - IP Statistics Component
 import React from 'react';
 import { Wifi, WifiOff } from 'lucide-react';
-import HAStatusIndicator from './HAStatusIndicator';
 
-const IPStats = ({ ipStats, enrichedReservations, haStatus, onHAStatusClick }) => {
+const IPStats = ({ ipStats, enrichedReservations }) => {
   // Calculate active vs reserved counts
   const activeReservations = enrichedReservations.filter(r => r.isActive).length;
   const inactiveReservations = enrichedReservations.filter(r => !r.isActive).length;
@@ -43,10 +42,10 @@ const IPStats = ({ ipStats, enrichedReservations, haStatus, onHAStatusClick }) =
         </div>
       </div>
       
-      {/* Lease Activity Summary with HA Status */}
+      {/* Reservation Activity Summary without HA Status */}
       <div className="mt-4 pt-4 border-t border-gray-200">
         <div className="flex items-center justify-between">
-          <h4 className="text-sm font-medium text-gray-700">System Status</h4>
+          <h4 className="text-sm font-medium text-gray-700">Reservation Activity</h4>
           <div className="flex items-center space-x-6">
             {/* Reservation Activity */}
             <div className="flex space-x-4 text-sm">
@@ -60,14 +59,6 @@ const IPStats = ({ ipStats, enrichedReservations, haStatus, onHAStatusClick }) =
                 <span className="font-medium text-gray-600">{inactiveReservations}</span>
                 <span className="text-gray-500">Reserved Only</span>
               </div>
-            </div>
-            
-            {/* HA Status Indicator */}
-            <div className="border-l border-gray-300 pl-4">
-              <HAStatusIndicator 
-                haStatus={haStatus} 
-                onClick={onHAStatusClick}
-              />
             </div>
           </div>
         </div>
