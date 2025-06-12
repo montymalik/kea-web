@@ -22,7 +22,8 @@ const KeaDHCPManager = () => {
   const [leases, setLeases] = useState([]);
   const [reservations, setReservations] = useState([]);
   const [subnets, setSubnets] = useState([]);
-  const [haStatus, setHaStatus] = useState(null); // ADD THIS LINE
+  const [reservedPoolConfig, setReservedPoolConfig] = useState(null); // NEW: Reserved pool configuration
+  const [haStatus, setHaStatus] = useState(null);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
     
@@ -33,7 +34,7 @@ const KeaDHCPManager = () => {
   const [showModifyCard, setShowModifyCard] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showModifyConfirm, setShowModifyConfirm] = useState(false);
-  const [showHAStatusModal, setShowHAStatusModal] = useState(false); // ADD THIS LINE
+  const [showHAStatusModal, setShowHAStatusModal] = useState(false);
     
   // Form data states
   const [modifyData, setModifyData] = useState({});
@@ -45,16 +46,18 @@ const KeaDHCPManager = () => {
     hostname: ''
   });
 
-  // Computed values - NOW PASSING SUBNETS DATA
+  // Computed values - NOW USING RESERVED POOL CONFIG FOR RESERVATIONS
   const ipStats = useMemo(() => {
-    console.log('Calculating IP stats with subnets:', subnets);
-    return calculateIPStats(reservations, subnets, 1); // Subnet ID 1
-  }, [reservations, subnets]);
+    console.log('Calculating IP stats with reserved pool config:', reservedPoolConfig);
+    // Use reserved pool configuration instead of subnets for reservation statistics
+    return calculateIPStats(reservations, reservedPoolConfig, 1); // Subnet ID 1
+  }, [reservations, reservedPoolConfig]);
     
   const leaseStats = useMemo(() => {
     console.log('Calculating lease stats with:', leases.length, 'leases and subnets:', subnets.length, 'subnets');
     
     try {
+      // Continue using subnets for lease statistics (DHCP pool information)
       const stats = calculateLeaseStats(leases, subnets, 1); // Subnet ID 1
       console.log('Lease stats calculated:', stats);
       return stats;
@@ -87,17 +90,17 @@ const KeaDHCPManager = () => {
     [enrichedReservations, searchTerm]
   );
 
-  // Data fetching
+  // Data fetching - NOW INCLUDES RESERVED POOL CONFIG
   const fetchData = async () => {
     setLoading(true);
     try {
-      // Fetch both primary data and HA status concurrently
+      // Fetch all data including reserved pool configuration
       const [allData, haStatusData] = await Promise.all([
         api.fetchAllData(),
         api.getHAStatus()
       ]);
 
-      console.log('Raw API data (leases, reservations, subnets):', allData);
+      console.log('Raw API data (leases, reservations, subnets, reservedPoolConfig):', allData);
       console.log('HA Status data received:', haStatusData);
 
       if (allData.leases) {
@@ -124,6 +127,20 @@ const KeaDHCPManager = () => {
       } else {
         console.log('No subnets data received');
         setSubnets([]);
+      }
+
+      // NEW: Set reserved pool configuration
+      if (allData.reservedPoolConfig) {
+        console.log('Setting reserved pool configuration:', allData.reservedPoolConfig);
+        setReservedPoolConfig(allData.reservedPoolConfig);
+      } else {
+        console.log('No reserved pool configuration received, using default');
+        setReservedPoolConfig({
+          range: '192.168.1.2 - 192.168.1.100',
+          startIP: '192.168.1.2',
+          endIP: '192.168.1.100',
+          total: 99
+        });
       }
 
       // SET HA STATUS IN STATE
@@ -156,7 +173,11 @@ const KeaDHCPManager = () => {
     }
   }, [subnets]);
 
-  // ADD DEBUGGING FOR HA STATUS STATE CHANGES
+  // NEW: Add debugging for reserved pool config state changes
+  useEffect(() => {
+    console.log('Reserved pool config state updated:', reservedPoolConfig);
+  }, [reservedPoolConfig]);
+
   useEffect(() => {
     console.log('HA Status state updated:', haStatus);
   }, [haStatus]);
@@ -299,7 +320,7 @@ const KeaDHCPManager = () => {
     setShowModifyCard(false);
     setShowDeleteConfirm(false);
     setShowModifyConfirm(false);
-    setShowHAStatusModal(false); // ADD THIS LINE
+    setShowHAStatusModal(false);
     setSelectedReservation(null);
   };
 

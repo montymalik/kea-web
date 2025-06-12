@@ -1,4 +1,4 @@
-// utils.js - Updated with Pool-Based IP Calculation
+// utils.js - Updated with Reserved Pool Configuration Support
 
 /**
  * Converts an IP address string to a numeric value for comparison
@@ -159,80 +159,74 @@ export const formatMacAddress = (macAddress) => {
 };
 
 /**
- * Calculates statistics for IP reservations within a specific subnet using pool information.
+ * Calculates statistics for IP reservations using reserved pool configuration from environment.
+ * This function now uses the reserved pool configuration instead of DHCP pools.
+ * 
  * @param {Array<object>} reservations - An array of reservation objects.
- * @param {Array<object>} subnets - An array of subnet objects with pool information.
+ * @param {object} reservedPoolConfig - Reserved pool configuration from environment.
  * @param {number} subnetId - The subnet ID to calculate stats for (default: 1).
  * @returns {object} - An object containing total, reserved, available IP counts and a status.
  */
-export const calculateIPStats = (reservations, subnets = [], subnetId = 1) => {
+export const calculateIPStats = (reservations, reservedPoolConfig = null, subnetId = 1) => {
+    console.log('calculateIPStats called with reservedPoolConfig:', reservedPoolConfig);
+    
     if (!reservations || !Array.isArray(reservations)) {
+        console.log('No reservations array provided');
         return {
-            total: 115, // Default for 192.168.1.100-214 range
+            total: reservedPoolConfig?.total || 99,
             reserved: 0,
-            available: 115,
+            available: reservedPoolConfig?.total || 99,
             status: 'Good',
-            poolInfo: 'Unknown'
+            poolInfo: reservedPoolConfig?.range || 'Unknown'
         };
     }
 
+    // Filter reservations for the specific subnet
     const subnetReservations = reservations.filter(r => {
         const rSubnetId = r.subnet_id;
-        // Robust check for subnet_id matching the target subnet
         return rSubnetId === subnetId || rSubnetId === String(subnetId) || 
                (typeof rSubnetId === 'string' && rSubnetId.trim() === String(subnetId));
     });
 
-    // Find the subnet configuration to get the pool information
-    const subnet = subnets.find(s => 
-        s.subnet_id === subnetId || s.id === subnetId ||
-        s.subnet_id === String(subnetId) || s.id === String(subnetId)
-    );
-
+    // Use reserved pool configuration
     let totalScope;
     let poolInfo = 'Unknown';
     
-    if (subnet && subnet.pools && subnet.pools.length > 0) {
-        // Calculate total IPs from all pools
-        totalScope = calculateTotalPoolIPs(subnet.pools);
-        
-        // Create a readable pool info string
-        const poolRanges = subnet.pools.map(pool => pool.pool).join(', ');
-        poolInfo = poolRanges;
-        
-        console.log(`Calculated ${totalScope} total IPs from pools: ${poolRanges}`);
-    } else if (subnet) {
-        // Fallback to CIDR calculation if no pools defined
-        const subnetCidr = subnet.subnet_prefix || subnet.subnet;
-        totalScope = calculateUsableIPs(subnetCidr);
-        poolInfo = `${subnetCidr} (full subnet)`;
-        console.log(`No pools found, calculated ${totalScope} usable IPs from CIDR: ${subnetCidr}`);
+    if (reservedPoolConfig) {
+        totalScope = reservedPoolConfig.total;
+        poolInfo = `${reservedPoolConfig.range} (Reserved Pool)`;
+        console.log(`Using reserved pool configuration: ${reservedPoolConfig.range} with ${totalScope} total IPs`);
     } else {
-        // Fallback to default if subnet not found
-        totalScope = 115; // Default for 192.168.1.100-214 (115 IPs)
-        poolInfo = '192.168.1.100 - 192.168.1.214 (default)';
-        console.warn(`Subnet ${subnetId} not found, using default pool scope of ${totalScope}`);
+        // Fallback to default if no reserved pool config
+        totalScope = 99; // Default for 192.168.1.2-100 (99 IPs)
+        poolInfo = '192.168.1.2 - 192.168.1.100 (default reserved pool)';
+        console.warn(`No reserved pool configuration provided, using default of ${totalScope} IPs`);
     }
 
     const reservedIPs = subnetReservations.length;
-    const availableIPs = totalScope - reservedIPs;
+    const availableIPs = Math.max(0, totalScope - reservedIPs);
     
     // Calculate status based on percentage of available IPs
-    const availablePercentage = (availableIPs / totalScope) * 100;
+    const availablePercentage = totalScope > 0 ? (availableIPs / totalScope) * 100 : 100;
     const status = availablePercentage < 10 ? 'Low' : 
                    availablePercentage < 30 ? 'Moderate' : 'Good';
 
-    return {
+    const result = {
         total: totalScope,
         reserved: reservedIPs,
         available: availableIPs,
         status: status,
         poolInfo: poolInfo
     };
+
+    console.log('calculateIPStats result (for reservations):', result);
+    return result;
 };
 
 /**
  * Calculates statistics for active leases within a specific subnet using pool information.
+ * This function continues to use DHCP pool information for lease statistics.
+ * 
  * @param {Array<object>} leases - An array of lease objects.
  * @param {Array<object>} subnets - An array of subnet objects with pool information.
  * @param {number} subnetId - The subnet ID to calculate stats for (default: 1).
@@ -249,7 +243,7 @@ export const calculateLeaseStats = (leases, subnets = [], subnetId = 1) => {
     if (!leases || !Array.isArray(leases)) {
         console.log('No leases array provided, returning default');
         return {
-            total: 115, // Default for 192.168.1.100-214 range
+            total: 115, // Default for 192.168.1.100-214 range (DHCP pool)
             active: 0,
             available: 115,
             status: 'Good',
@@ -285,14 +279,14 @@ export const calculateLeaseStats = (leases, subnets = [], subnetId = 1) => {
     let poolInfo = 'Unknown';
     
     if (subnet && subnet.pools && subnet.pools.length > 0) {
-        // Calculate total IPs from all pools
+        // Calculate total IPs from all DHCP pools
         totalScope = calculateTotalPoolIPs(subnet.pools);
         
         // Create a readable pool info string
         const poolRanges = subnet.pools.map(pool => pool.pool).join(', ');
-        poolInfo = poolRanges;
+        poolInfo = `${poolRanges} (DHCP Pool)`;
         
-        console.log(`Calculated ${totalScope} total IPs from pools: ${poolRanges}`);
+        console.log(`Calculated ${totalScope} total IPs from DHCP pools: ${poolRanges}`);
     } else if (subnet) {
         // Fallback to CIDR calculation if no pools defined
         const subnetCidr = subnet.subnet_prefix || subnet.subnet;
@@ -302,7 +296,7 @@ export const calculateLeaseStats = (leases, subnets = [], subnetId = 1) => {
     } else {
         // Fallback to default if subnet not found
         totalScope = 115; // Default for 192.168.1.100-214 (115 IPs)
-        poolInfo = '192.168.1.100 - 192.168.1.214 (default)';
+        poolInfo = '192.168.1.100 - 192.168.1.214 (default DHCP pool)';
         console.warn(`Subnet ${subnetId} not found for lease stats, using default pool scope of ${totalScope}`);
     }
 
