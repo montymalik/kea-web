@@ -1,5 +1,5 @@
-// LeasesTable.jsx - DEBUG VERSION
-import React from 'react';
+// LeasesTable.jsx - Added numerical sorting by IP address
+import React, { useMemo } from 'react';
 import { formatExpiration, formatMacAddress } from '../utils/utils';
 
 const LeasesTable = ({ leases, onDeleteLease }) => {
@@ -11,6 +11,25 @@ const LeasesTable = ({ leases, onDeleteLease }) => {
   if (leases && leases.length > 0) {
     console.log('LeasesTable first 3 leases:', leases.slice(0, 3));
   }
+
+  // Helper function to convert IP address to number for sorting
+  const ipToNumber = (ip) => {
+    if (!ip) return 0;
+    return ip.split('.').reduce((acc, octet) => (acc << 8) + parseInt(octet, 10), 0) >>> 0;
+  };
+
+  // Sort leases by IP address numerically
+  const sortedLeases = useMemo(() => {
+    if (!leases || !Array.isArray(leases)) {
+      return [];
+    }
+    
+    return [...leases].sort((a, b) => {
+      const ipA = ipToNumber(a.ip_address);
+      const ipB = ipToNumber(b.ip_address);
+      return ipA - ipB;
+    });
+  }, [leases]);
 
   if (!leases) {
     console.log('LeasesTable: leases is null/undefined');
@@ -39,7 +58,7 @@ const LeasesTable = ({ leases, onDeleteLease }) => {
     );
   }
 
-  console.log('LeasesTable: Rendering table with', leases.length, 'leases');
+  console.log('LeasesTable: Rendering table with', sortedLeases.length, 'sorted leases');
 
   return (
     <div className="overflow-x-auto bg-white rounded-lg shadow">
@@ -70,7 +89,7 @@ const LeasesTable = ({ leases, onDeleteLease }) => {
           </tr>
         </thead>
         <tbody className="bg-white divide-y divide-gray-200">
-          {leases.map((lease, index) => {
+          {sortedLeases.map((lease, index) => {
             // Debug each lease
             console.log(`Processing lease ${index}:`, lease);
             

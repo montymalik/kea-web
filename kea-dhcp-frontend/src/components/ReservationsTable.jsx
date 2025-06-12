@@ -1,9 +1,28 @@
-// ReservationsTable.jsx
-import React from 'react';
+// ReservationsTable.jsx - Added numerical sorting by IP address
+import React, { useMemo } from 'react';
 import { formatMacAddress, formatExpiration } from '../utils/utils';
 import { Wifi, WifiOff } from 'lucide-react';
 
 const ReservationsTable = ({ reservations, onOpenDetails }) => {
+  // Helper function to convert IP address to number for sorting
+  const ipToNumber = (ip) => {
+    if (!ip) return 0;
+    return ip.split('.').reduce((acc, octet) => (acc << 8) + parseInt(octet, 10), 0) >>> 0;
+  };
+
+  // Sort reservations by IP address numerically
+  const sortedReservations = useMemo(() => {
+    if (!reservations || !Array.isArray(reservations)) {
+      return [];
+    }
+    
+    return [...reservations].sort((a, b) => {
+      const ipA = ipToNumber(a.ip_address);
+      const ipB = ipToNumber(b.ip_address);
+      return ipA - ipB;
+    });
+  }, [reservations]);
+
   return (
     <div className="bg-white rounded-lg shadow overflow-hidden">
       <div className="overflow-x-auto">
@@ -34,7 +53,7 @@ const ReservationsTable = ({ reservations, onOpenDetails }) => {
             </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
-            {reservations.map((reservation) => (
+            {sortedReservations.map((reservation) => (
               <tr key={reservation.host_id} className="hover:bg-gray-50">
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                   <div className="flex items-center space-x-2">
@@ -75,9 +94,7 @@ const ReservationsTable = ({ reservations, onOpenDetails }) => {
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                   {reservation.isActive && reservation.leaseInfo ? (
                     <span className="text-orange-600 font-medium">
-                      {/* --- CHANGE THIS LINE --- */}
                       {formatExpiration(reservation.leaseInfo)}
-                      {/* ------------------------- */}
                     </span>
                   ) : (
                     <span className="text-gray-400">-</span>
@@ -95,7 +112,7 @@ const ReservationsTable = ({ reservations, onOpenDetails }) => {
             ))}
           </tbody>
         </table>
-        {reservations.length === 0 && (
+        {sortedReservations.length === 0 && (
           <div className="text-center py-8 text-gray-500">
             No reservations found
           </div>
