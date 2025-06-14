@@ -68,7 +68,7 @@ const LeaseStats = ({ leaseStats, leases, haStatus, onHAStatusClick }) => {
         </div>
       </div>
       
-      {/* Lease Activity Summary with HA Status */}
+      {/* Lease Activity Summary with HA Status (only if HA is configured) */}
       <div className="mt-4 pt-4 border-t border-gray-200">
         <div className="flex items-center justify-between">
           <h4 className="text-sm font-medium text-gray-700">System Status</h4>
@@ -94,13 +94,15 @@ const LeaseStats = ({ leaseStats, leases, haStatus, onHAStatusClick }) => {
               )}
             </div>
             
-            {/* HA Status Indicator */}
-            <div className="border-l border-gray-300 pl-4">
-              <HAStatusIndicator 
-                haStatus={haStatus} 
-                onClick={onHAStatusClick}
-              />
-            </div>
+            {/* HA Status Indicator - Only show if HA is configured */}
+            {haStatus && haStatus.configured !== false && (
+              <div className="border-l border-gray-300 pl-4">
+                <HAStatusIndicator 
+                  haStatus={haStatus} 
+                  onClick={onHAStatusClick}
+                />
+              </div>
+            )}
           </div>
         </div>
       </div>
