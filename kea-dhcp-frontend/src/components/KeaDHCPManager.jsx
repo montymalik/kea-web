@@ -1,3 +1,5 @@
+// Updated KeaDHCPManager.jsx - Fix the state and computed values
+
 import React, { useState, useEffect, useMemo } from 'react';
 import { api } from '../services/api';
 import { calculateIPStats, filterData, enrichReservationsWithLeaseStatus, calculateLeaseStats } from '../utils/utils';
@@ -22,7 +24,8 @@ const KeaDHCPManager = () => {
   const [leases, setLeases] = useState([]);
   const [reservations, setReservations] = useState([]);
   const [subnets, setSubnets] = useState([]);
-  const [haStatus, setHaStatus] = useState(null); // ADD THIS LINE
+  const [reservedPool, setReservedPool] = useState(null); // ADD THIS LINE - for reserved pool config
+  const [haStatus, setHaStatus] = useState(null);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
     
@@ -33,7 +36,7 @@ const KeaDHCPManager = () => {
   const [showModifyCard, setShowModifyCard] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showModifyConfirm, setShowModifyConfirm] = useState(false);
-  const [showHAStatusModal, setShowHAStatusModal] = useState(false); // ADD THIS LINE
+  const [showHAStatusModal, setShowHAStatusModal] = useState(false);
     
   // Form data states
   const [modifyData, setModifyData] = useState({});
@@ -45,11 +48,11 @@ const KeaDHCPManager = () => {
     hostname: ''
   });
 
-  // Computed values - NOW PASSING SUBNETS DATA
+  // Computed values - NOW PASSING RESERVED POOL CONFIG INSTEAD OF SUBNETS
   const ipStats = useMemo(() => {
-    console.log('Calculating IP stats with subnets:', subnets);
-    return calculateIPStats(reservations, subnets, 1); // Subnet ID 1
-  }, [reservations, subnets]);
+    console.log('Calculating IP stats with reservedPool:', reservedPool);
+    return calculateIPStats(reservations, reservedPool, 1); // Pass reservedPool instead of subnets
+  }, [reservations, reservedPool]); // Update dependency
     
   const leaseStats = useMemo(() => {
     console.log('Calculating lease stats with:', leases.length, 'leases and subnets:', subnets.length, 'subnets');
@@ -87,7 +90,7 @@ const KeaDHCPManager = () => {
     [enrichedReservations, searchTerm]
   );
 
-  // Data fetching
+  // Data fetching - UPDATED TO HANDLE RESERVED POOL CONFIG
   const fetchData = async () => {
     setLoading(true);
     try {
@@ -97,7 +100,7 @@ const KeaDHCPManager = () => {
         api.getHAStatus()
       ]);
 
-      console.log('Raw API data (leases, reservations, subnets):', allData);
+      console.log('Raw API data (leases, reservations, subnets, reservedPool):', allData);
       console.log('HA Status data received:', haStatusData);
 
       if (allData.leases) {
@@ -124,6 +127,15 @@ const KeaDHCPManager = () => {
       } else {
         console.log('No subnets data received');
         setSubnets([]);
+      }
+
+      // SET RESERVED POOL CONFIG IN STATE
+      if (allData.reservedPool) {
+        console.log('Setting reserved pool config:', allData.reservedPool);
+        setReservedPool(allData.reservedPool);
+      } else {
+        console.log('No reserved pool config received');
+        setReservedPool(null);
       }
 
       // SET HA STATUS IN STATE - Only if HA is configured
@@ -161,7 +173,11 @@ const KeaDHCPManager = () => {
     }
   }, [subnets]);
 
-  // ADD DEBUGGING FOR HA STATUS STATE CHANGES
+  // ADD DEBUGGING FOR RESERVED POOL STATE CHANGES
+  useEffect(() => {
+    console.log('Reserved pool state updated:', reservedPool);
+  }, [reservedPool]);
+
   useEffect(() => {
     console.log('HA Status state updated:', haStatus);
   }, [haStatus]);
@@ -304,7 +320,7 @@ const KeaDHCPManager = () => {
     setShowModifyCard(false);
     setShowDeleteConfirm(false);
     setShowModifyConfirm(false);
-    setShowHAStatusModal(false); // ADD THIS LINE
+    setShowHAStatusModal(false);
     setSelectedReservation(null);
   };
 

@@ -46,6 +46,37 @@ export const api = {
     }
   },
 
+  // Get reserved pool configuration from backend
+  async getReservedPoolConfig() {
+    try {
+      console.log('Fetching reserved pool configuration...');
+      const response = await fetchWithAuth(`${API_BASE.replace('/api', '')}/config/reserved-pool`);
+      const data = await response.json();
+      
+      if (data.success && data.reservedPool) {
+        console.log('Reserved pool config received:', data.reservedPool);
+        return data.reservedPool;
+      } else {
+        console.warn('No reserved pool config in response, using defaults');
+        return {
+          range: '192.168.1.2 - 192.168.1.100',
+          startIP: '192.168.1.2',
+          endIP: '192.168.1.100',
+          total: 99
+        };
+      }
+    } catch (error) {
+      console.error('Error fetching reserved pool config:', error);
+      // Return default configuration
+      return {
+        range: '192.168.1.2 - 192.168.1.100',
+        startIP: '192.168.1.2',
+        endIP: '192.168.1.100',
+        total: 99
+      };
+    }
+  },
+
   // Check if HA hook is loaded and configured
   async checkHAConfiguration() {
     try {
@@ -150,21 +181,23 @@ export const api = {
     }
   },
 
-  // Fetch all data from Kea (subnet 1 by default)
+  // Fetch all data from Kea (subnet 1 by default) - UPDATED TO INCLUDE RESERVED POOL CONFIG
   async fetchAllData(subnetId = 1) {
     try {
-      console.log(`Fetching all data for subnet ID: ${subnetId}`); // Added log
-      const [leasesRes, reservationsRes, subnetsRes] = await Promise.all([
+      console.log(`Fetching all data for subnet ID: ${subnetId}`);
+      const [leasesRes, reservationsRes, subnetsRes, reservedPoolRes] = await Promise.all([
         this.getLeases(subnetId),
         this.getReservations(subnetId),
-        this.getSubnets()
+        this.getSubnets(),
+        this.getReservedPoolConfig()
       ]);
 
-      console.log('All data fetched successfully.'); // Added log
+      console.log('All data fetched successfully.');
       return {
         leases: leasesRes || [],
         reservations: reservationsRes || [],
-        subnets: subnetsRes || []
+        subnets: subnetsRes || [],
+        reservedPool: reservedPoolRes
       };
     } catch (error) {
       console.error('Error fetching data from Kea:', error);
