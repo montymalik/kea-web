@@ -1,11 +1,11 @@
-// utils.js - Updated with Reserved Pool Configuration Support
+// utils.js - Updated with Static IP Support and Enhanced IP Pool Management
 
 /**
  * Converts an IP address string to a numeric value for comparison
  * @param {string} ip - IP address like "192.168.1.100"
  * @returns {number} - Numeric representation
  */
-const ipToNumber = (ip) => {
+export const ipToNumber = (ip) => {
   if (!ip || typeof ip !== 'string') return 0;
   const parts = ip.split('.');
   if (parts.length !== 4) return 0;
@@ -15,6 +15,21 @@ const ipToNumber = (ip) => {
     if (isNaN(num) || num < 0 || num > 255) return 0;
     return (acc << 8) + num;
   }, 0) >>> 0;
+};
+
+/**
+ * Checks if an IP address is within a given range
+ * @param {string} ip - IP address to check
+ * @param {string} startIP - Start of range
+ * @param {string} endIP - End of range
+ * @returns {boolean} - True if IP is in range
+ */
+export const isIPInRange = (ip, startIP, endIP) => {
+  const ipNum = ipToNumber(ip);
+  const startNum = ipToNumber(startIP);
+  const endNum = ipToNumber(endIP);
+  
+  return ipNum >= startNum && ipNum <= endNum;
 };
 
 /**
@@ -160,25 +175,26 @@ export const formatMacAddress = (macAddress) => {
 
 /**
  * Calculates statistics for IP reservations using reserved pool configuration from environment.
- * This function now uses the reserved pool configuration instead of DHCP pools.
+ * This function now accounts for static IPs assigned outside of DHCP.
  * 
  * @param {Array<object>} reservations - An array of reservation objects.
+ * @param {Array<object>} staticIPs - An array of static IP assignments.
  * @param {object} reservedPoolConfig - Reserved pool configuration from environment.
  * @param {number} subnetId - The subnet ID to calculate stats for (default: 1).
- * @returns {object} - An object containing total, reserved, available IP counts and a status.
+ * @returns {object} - An object containing total, reserved, static, available IP counts and a status.
  */
-export const calculateIPStats = (reservations, reservedPoolConfig = null, subnetId = 1) => {
+export const calculateIPStats = (reservations, staticIPs = [], reservedPoolConfig = null, subnetId = 1) => {
     console.log('calculateIPStats called with reservedPoolConfig:', reservedPoolConfig);
+    console.log('calculateIPStats called with staticIPs:', staticIPs?.length || 0, 'static IPs');
     
     if (!reservations || !Array.isArray(reservations)) {
         console.log('No reservations array provided');
-        return {
-            total: reservedPoolConfig?.total || 99,
-            reserved: 0,
-            available: reservedPoolConfig?.total || 99,
-            status: 'Good',
-            poolInfo: reservedPoolConfig?.range || 'Unknown'
-        };
+        reservations = [];
+    }
+    
+    if (!staticIPs || !Array.isArray(staticIPs)) {
+        console.log('No staticIPs array provided');
+        staticIPs = [];
     }
 
     // Filter reservations for the specific subnet
@@ -187,6 +203,15 @@ export const calculateIPStats = (reservations, reservedPoolConfig = null, subnet
         return rSubnetId === subnetId || rSubnetId === String(subnetId) || 
                (typeof rSubnetId === 'string' && rSubnetId.trim() === String(subnetId));
     });
+
+    // Filter static IPs that fall within the reserved pool range
+    let staticIPsInPool = [];
+    if (reservedPoolConfig && reservedPoolConfig.startIP && reservedPoolConfig.endIP) {
+        staticIPsInPool = staticIPs.filter(staticIP => 
+            isIPInRange(staticIP.ip_address, reservedPoolConfig.startIP, reservedPoolConfig.endIP)
+        );
+        console.log(`Found ${staticIPsInPool.length} static IPs within reserved pool range`);
+    }
 
     // Use reserved pool configuration
     let totalScope;
@@ -204,7 +229,9 @@ export const calculateIPStats = (reservations, reservedPoolConfig = null, subnet
     }
 
     const reservedIPs = subnetReservations.length;
-    const availableIPs = Math.max(0, totalScope - reservedIPs);
+    const staticIPsCount = staticIPsInPool.length;
+    const totalUsed = reservedIPs + staticIPsCount;
+    const availableIPs = Math.max(0, totalScope - totalUsed);
     
     // Calculate status based on percentage of available IPs
     const availablePercentage = totalScope > 0 ? (availableIPs / totalScope) * 100 : 100;
@@ -214,12 +241,14 @@ export const calculateIPStats = (reservations, reservedPoolConfig = null, subnet
     const result = {
         total: totalScope,
         reserved: reservedIPs,
+        static: staticIPsCount,
+        totalUsed: totalUsed,
         available: availableIPs,
         status: status,
         poolInfo: poolInfo
     };
 
-    console.log('calculateIPStats result (for reservations):', result);
+    console.log('calculateIPStats result (for reservations with static IPs):', result);
     return result;
 };
 
@@ -321,9 +350,63 @@ export const calculateLeaseStats = (leases, subnets = [], subnetId = 1) => {
 };
 
 /**
- * Filters an array of data items based on a search term, matching against IP address, hostname, or MAC address.
+ * Finds the next available IP address considering reservations, leases, and static IPs
+ * @param {Array<object>} reservations - Array of reservations
+ * @param {Array<object>} leases - Array of active leases
+ * @param {Array<object>} staticIPs - Array of static IP assignments
+ * @param {object} reservedPoolConfig - Reserved pool configuration
+ * @returns {string|null} - Next available IP address or null if none found
+ */
+export const findNextAvailableIP = (reservations = [], leases = [], staticIPs = [], reservedPoolConfig = null) => {
+    console.log('findNextAvailableIP called');
+    
+    if (!reservedPoolConfig || !reservedPoolConfig.startIP || !reservedPoolConfig.endIP) {
+        console.warn('No reserved pool config provided for IP search');
+        return null;
+    }
+
+    // Get all used IPs from all sources
+    const usedIPs = new Set([
+        ...reservations.map(r => r.ip_address || r['ip-address']),
+        ...leases.map(l => l.ip_address || l['ip-address']),
+        ...staticIPs.map(s => s.ip_address)
+    ].filter(ip => ip)); // Filter out undefined/null values
+
+    console.log('Used IPs:', Array.from(usedIPs).sort());
+
+    // Generate IP range from reserved pool config
+    const startNum = ipToNumber(reservedPoolConfig.startIP);
+    const endNum = ipToNumber(reservedPoolConfig.endIP);
+    
+    if (startNum === 0 || endNum === 0 || endNum < startNum) {
+        console.error('Invalid IP range in reserved pool config');
+        return null;
+    }
+
+    // Find first available IP in the range
+    for (let ipNum = startNum; ipNum <= endNum; ipNum++) {
+        // Convert back to IP string
+        const ip = [
+            (ipNum >>> 24) & 255,
+            (ipNum >>> 16) & 255,
+            (ipNum >>> 8) & 255,
+            ipNum & 255
+        ].join('.');
+        
+        if (!usedIPs.has(ip)) {
+            console.log('Found next available IP:', ip);
+            return ip;
+        }
+    }
+
+    console.log('No available IPs found in reserved pool range');
+    return null;
+};
+
+/**
+ * Filters an array of data items based on a search term, matching against IP address, hostname, MAC address, or description.
  *
- * @param {Array<object>} data - The array of items (leases or reservations) to filter.
+ * @param {Array<object>} data - The array of items (leases, reservations, or static IPs) to filter.
  * @param {string} searchTerm - The user's search input.
  * @returns {Array<object>} - The filtered array of items.
  */
@@ -335,7 +418,7 @@ export const filterData = (data, searchTerm) => {
         return data;
     }
 
-    // Convert search term to lowercase for case-insensitive comparison (hostnames, IPs)
+    // Convert search term to lowercase for case-insensitive comparison (hostnames, IPs, descriptions)
     const lowerCaseSearchTerm = trimmedSearchTerm.toLowerCase();
     // Convert search term to uppercase for MAC address comparison
     const upperCaseSearchTerm = trimmedSearchTerm.toUpperCase();
@@ -350,7 +433,10 @@ export const filterData = (data, searchTerm) => {
         // MAC Address (convert both to uppercase for comparison)
         const macMatch = item.mac_address && item.mac_address.toUpperCase().includes(upperCaseSearchTerm);
         
-        return ipMatch || hostnameMatch || macMatch;
+        // Description (for static IPs)
+        const descriptionMatch = item.description && item.description.toLowerCase().includes(lowerCaseSearchTerm);
+        
+        return ipMatch || hostnameMatch || macMatch || descriptionMatch;
     });
 
     return filtered;

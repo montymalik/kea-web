@@ -1,4 +1,4 @@
-// Updated KeaDHCPManager.jsx - Fix the state and computed values
+// Updated KeaDHCPManager.jsx - Main component with Static IP support
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { api } from '../services/api';
@@ -12,8 +12,12 @@ import IPStats from './IPStats';
 import LeaseStats from './LeaseStats';
 import LeasesTable from './LeasesTable';
 import ReservationsTable from './ReservationsTable';
+import StaticIPTable from './StaticIPTable';
 import AddReservationModal from './AddReservationModal';
+import AddStaticIPModal from './AddStaticIPModal';
 import ReservationDetailsModal from './ReservationDetailsModal';
+import StaticIPDetailsModal from './StaticIPDetailsModal';
+import EditStaticIPModal from './EditStaticIPModal';
 import ModifyReservationModal from './ModifyReservationModal';
 import HAStatusModal from './HAStatusModal';
 import { DeleteConfirmationModal, ModifyConfirmationModal } from './ConfirmationModals';
@@ -23,17 +27,22 @@ const KeaDHCPManager = () => {
   const [activeTab, setActiveTab] = useState('leases');
   const [leases, setLeases] = useState([]);
   const [reservations, setReservations] = useState([]);
+  const [staticIPs, setStaticIPs] = useState([]);
   const [subnets, setSubnets] = useState([]);
-  const [reservedPool, setReservedPool] = useState(null); // ADD THIS LINE - for reserved pool config
+  const [reservedPool, setReservedPool] = useState(null);
   const [haStatus, setHaStatus] = useState(null);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
     
   // Modal states
   const [showAddForm, setShowAddForm] = useState(false);
+  const [showAddStaticIPForm, setShowAddStaticIPForm] = useState(false);
   const [selectedReservation, setSelectedReservation] = useState(null);
+  const [selectedStaticIP, setSelectedStaticIP] = useState(null);
   const [showDetailsCard, setShowDetailsCard] = useState(false);
+  const [showStaticIPDetails, setShowStaticIPDetails] = useState(false);
   const [showModifyCard, setShowModifyCard] = useState(false);
+  const [showEditStaticIP, setShowEditStaticIP] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showModifyConfirm, setShowModifyConfirm] = useState(false);
   const [showHAStatusModal, setShowHAStatusModal] = useState(false);
@@ -47,18 +56,30 @@ const KeaDHCPManager = () => {
     ipv4_address: '',
     hostname: ''
   });
+  const [newStaticIP, setNewStaticIP] = useState({
+    ip_address: '',
+    mac_address: '',
+    hostname: '',
+    description: ''
+  });
+  const [editStaticIP, setEditStaticIP] = useState({
+    ip_address: '',
+    mac_address: '',
+    hostname: '',
+    description: ''
+  });
 
-  // Computed values - NOW PASSING RESERVED POOL CONFIG INSTEAD OF SUBNETS
+  // Computed values - Now includes static IPs in IP stats calculation
   const ipStats = useMemo(() => {
-    console.log('Calculating IP stats with reservedPool:', reservedPool);
-    return calculateIPStats(reservations, reservedPool, 1); // Pass reservedPool instead of subnets
-  }, [reservations, reservedPool]); // Update dependency
+    console.log('Calculating IP stats with reservedPool:', reservedPool, 'and staticIPs:', staticIPs.length);
+    return calculateIPStats(reservations, staticIPs, reservedPool, 1);
+  }, [reservations, staticIPs, reservedPool]);
     
   const leaseStats = useMemo(() => {
     console.log('Calculating lease stats with:', leases.length, 'leases and subnets:', subnets.length, 'subnets');
     
     try {
-      const stats = calculateLeaseStats(leases, subnets, 1); // Subnet ID 1
+      const stats = calculateLeaseStats(leases, subnets, 1);
       console.log('Lease stats calculated:', stats);
       return stats;
     } catch (error) {
@@ -90,7 +111,13 @@ const KeaDHCPManager = () => {
     [enrichedReservations, searchTerm]
   );
 
-  // Data fetching - UPDATED TO HANDLE RESERVED POOL CONFIG
+  // Filter static IPs
+  const filteredStaticIPs = useMemo(() => 
+    filterData(staticIPs, searchTerm), 
+    [staticIPs, searchTerm]
+  );
+
+  // Data fetching - Updated to include static IPs
   const fetchData = async () => {
     setLoading(true);
     try {
@@ -100,12 +127,11 @@ const KeaDHCPManager = () => {
         api.getHAStatus()
       ]);
 
-      console.log('Raw API data (leases, reservations, subnets, reservedPool):', allData);
+      console.log('Raw API data (leases, reservations, subnets, reservedPool, staticIPs):', allData);
       console.log('HA Status data received:', haStatusData);
 
       if (allData.leases) {
         console.log('Setting leases:', allData.leases.length, 'leases');
-        console.log('First lease in allData.leases:', allData.leases[0]);
         setLeases(allData.leases);
       } else {
         console.log('No leases data received');
@@ -119,17 +145,23 @@ const KeaDHCPManager = () => {
         console.log('No reservations data received');
         setReservations([]);
       }
+
+      if (allData.staticIPs) {
+        console.log('Setting static IPs:', allData.staticIPs.length, 'static IPs');
+        setStaticIPs(allData.staticIPs);
+      } else {
+        console.log('No static IPs data received');
+        setStaticIPs([]);
+      }
         
       if (allData.subnets) {
         console.log('Setting subnets:', allData.subnets.length, 'subnets');
-        console.log('Subnet details:', allData.subnets);
         setSubnets(allData.subnets);
       } else {
         console.log('No subnets data received');
         setSubnets([]);
       }
 
-      // SET RESERVED POOL CONFIG IN STATE
       if (allData.reservedPool) {
         console.log('Setting reserved pool config:', allData.reservedPool);
         setReservedPool(allData.reservedPool);
@@ -138,7 +170,7 @@ const KeaDHCPManager = () => {
         setReservedPool(null);
       }
 
-      // SET HA STATUS IN STATE - Only if HA is configured
+      // Set HA status
       if (haStatusData) {
         console.log('Setting HA status:', haStatusData);
         if (haStatusData.configured === false) {
@@ -157,30 +189,6 @@ const KeaDHCPManager = () => {
     }
     setLoading(false);
   };
-
-  // Add debugging for state changes
-  useEffect(() => {
-    console.log('Leases state updated:', leases.length, 'leases');
-    if (leases.length > 0) {
-      console.log('First lease in state:', leases[0]);
-    }
-  }, [leases]);
-
-  useEffect(() => {
-    console.log('Subnets state updated:', subnets.length, 'subnets');
-    if (subnets.length > 0) {
-      console.log('First subnet in state:', subnets[0]);
-    }
-  }, [subnets]);
-
-  // ADD DEBUGGING FOR RESERVED POOL STATE CHANGES
-  useEffect(() => {
-    console.log('Reserved pool state updated:', reservedPool);
-  }, [reservedPool]);
-
-  useEffect(() => {
-    console.log('HA Status state updated:', haStatus);
-  }, [haStatus]);
 
   useEffect(() => {
     fetchData();
@@ -259,13 +267,11 @@ const KeaDHCPManager = () => {
 
   const updateReservation = async () => {
     try {
-      // Use the new update API with lease management
       await api.updateReservation(selectedReservation.host_id, modifyData, originalData);
       
       await fetchData();
       closeAllModals();
       
-      // Show success message with additional info if IP changed
       if (originalData.ipv4_address !== modifyData.ipv4_address) {
         alert(`Reservation updated successfully!\n\nIP changed from ${originalData.ipv4_address} to ${modifyData.ipv4_address}.\nOld lease has been deleted. The device should request the new IP on next DHCP renewal.`);
       } else {
@@ -277,6 +283,56 @@ const KeaDHCPManager = () => {
     }
   };
 
+  // Static IP operations
+  const addStaticIPAssignment = async () => {
+    try {
+      await api.addStaticIPAssignment(newStaticIP);
+      await fetchData();
+      setShowAddStaticIPForm(false);
+      setNewStaticIP({
+        ip_address: '',
+        mac_address: '',
+        hostname: '',
+        description: ''
+      });
+      alert('Static IP assignment added successfully');
+    } catch (error) {
+      console.error('Error adding static IP:', error);
+      alert(`Failed to add static IP: ${error.message}`);
+    }
+  };
+
+  const editStaticIPAssignment = async () => {
+    try {
+      await api.updateStaticIPAssignment(selectedStaticIP.id, editStaticIP);
+      await fetchData();
+      closeAllModals();
+      alert('Static IP assignment updated successfully');
+    } catch (error) {
+      console.error('Error updating static IP:', error);
+      alert(`Error updating static IP: ${error.message}`);
+    }
+  };
+
+  const deleteStaticIPAssignment = async (staticIP) => {
+    if (!confirm(`Delete static IP assignment for ${staticIP.ip_address}?`)) return;
+    
+    try {
+      const success = await api.deleteStaticIPAssignment(staticIP.id);
+      if (success) {
+        await fetchData();
+        closeAllModals();
+        alert('Static IP assignment deleted successfully');
+      } else {
+        alert('Failed to delete static IP assignment');
+      }
+    } catch (error) {
+      console.error('Error deleting static IP:', error);
+      alert('Error deleting static IP assignment');
+    }
+  };
+
+  // Enhanced next available IP function (considers static IPs)
   const getNextAvailableIP = async () => {
     if (!newReservation.subnet_id) {
       alert('Please select a subnet first');
@@ -292,7 +348,18 @@ const KeaDHCPManager = () => {
     }
   };
 
-  // Modal handlers
+  // Enhanced next available IP for static IPs
+  const getNextAvailableIPForStatic = async () => {
+    try {
+      const data = await api.getNextAvailableIP(1); // Assuming subnet 1
+      setNewStaticIP({...newStaticIP, ip_address: data.nextAvailableIP});
+    } catch (error) {
+      console.error('Error fetching next available IP for static assignment:', error);
+      alert(`No available IPs found: ${error.message}`);
+    }
+  };
+
+  // Modal handlers for reservations
   const openDetailsCard = (reservation) => {
     setSelectedReservation(reservation);
     setShowDetailsCard(true);
@@ -315,13 +382,34 @@ const KeaDHCPManager = () => {
     setShowModifyCard(true);
   };
 
+  // Modal handlers for static IPs
+  const openStaticIPDetails = (staticIP) => {
+    setSelectedStaticIP(staticIP);
+    setShowStaticIPDetails(true);
+  };
+
+  const openEditStaticIP = (staticIP) => {
+    setSelectedStaticIP(staticIP);
+    setEditStaticIP({
+      ip_address: staticIP.ip_address,
+      mac_address: staticIP.mac_address || '',
+      hostname: staticIP.hostname || '',
+      description: staticIP.description || ''
+    });
+    setShowStaticIPDetails(false);
+    setShowEditStaticIP(true);
+  };
+
   const closeAllModals = () => {
     setShowDetailsCard(false);
+    setShowStaticIPDetails(false);
     setShowModifyCard(false);
+    setShowEditStaticIP(false);
     setShowDeleteConfirm(false);
     setShowModifyConfirm(false);
     setShowHAStatusModal(false);
     setSelectedReservation(null);
+    setSelectedStaticIP(null);
   };
 
   const handleModifySubmit = () => {
@@ -338,6 +426,7 @@ const KeaDHCPManager = () => {
           setActiveTab={setActiveTab} 
           leasesCount={leases.length}
           reservationsCount={reservations.length}
+          staticIPsCount={staticIPs.length}
         />
 
         {activeTab === 'leases' && leaseStats && (
@@ -352,6 +441,16 @@ const KeaDHCPManager = () => {
           <IPStats 
             ipStats={ipStats} 
             enrichedReservations={enrichedReservations}
+            staticIPs={staticIPs}
+            haStatus={haStatus}
+            onHAStatusClick={handleHAStatusClick}
+          />
+        )}
+        {activeTab === 'static-ips' && (
+          <IPStats 
+            ipStats={ipStats} 
+            enrichedReservations={enrichedReservations}
+            staticIPs={staticIPs}
             haStatus={haStatus}
             onHAStatusClick={handleHAStatusClick}
           />
@@ -362,6 +461,7 @@ const KeaDHCPManager = () => {
           setSearchTerm={setSearchTerm}
           activeTab={activeTab}
           onAddReservation={() => setShowAddForm(true)}
+          onAddStaticIP={() => setShowAddStaticIPForm(true)}
         />
 
         {activeTab === 'leases' && (
@@ -386,7 +486,16 @@ const KeaDHCPManager = () => {
           />
         )}
 
-        {/* Modals */}
+        {activeTab === 'static-ips' && (
+          <StaticIPTable 
+            staticIPs={filteredStaticIPs}
+            onOpenDetails={openStaticIPDetails}
+            onEdit={openEditStaticIP}
+            onDelete={deleteStaticIPAssignment}
+          />
+        )}
+
+        {/* Reservation Modals */}
         <AddReservationModal
           show={showAddForm}
           onClose={() => setShowAddForm(false)}
@@ -414,6 +523,33 @@ const KeaDHCPManager = () => {
           onSubmit={handleModifySubmit}
         />
 
+        {/* Static IP Modals */}
+        <AddStaticIPModal
+          show={showAddStaticIPForm}
+          onClose={() => setShowAddStaticIPForm(false)}
+          newStaticIP={newStaticIP}
+          setNewStaticIP={setNewStaticIP}
+          onSubmit={addStaticIPAssignment}
+          onGetNextAvailableIP={getNextAvailableIPForStatic}
+        />
+
+        <StaticIPDetailsModal
+          show={showStaticIPDetails}
+          staticIP={selectedStaticIP}
+          onClose={closeAllModals}
+          onEdit={openEditStaticIP}
+          onDelete={deleteStaticIPAssignment}
+        />
+
+        <EditStaticIPModal
+          show={showEditStaticIP}
+          editStaticIP={editStaticIP}
+          setEditStaticIP={setEditStaticIP}
+          onClose={closeAllModals}
+          onSubmit={editStaticIPAssignment}
+        />
+
+        {/* System Modals */}
         <HAStatusModal
           show={showHAStatusModal}
           haStatus={haStatus}

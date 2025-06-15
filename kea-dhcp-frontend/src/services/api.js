@@ -1,4 +1,14 @@
-// api.js - Kea DHCP API service for version 2.7.9 (no authentication)
+// api.js - Updated Kea DHCP API service with Static IP support
+
+import { 
+  getStaticIPs, 
+  addStaticIP, 
+  updateStaticIP, 
+  deleteStaticIP, 
+  validateStaticIPData,
+  isStaticIPAssigned 
+} from './staticIPAPI';
+import { findNextAvailableIP } from '../utils/utils';
 
 // Use Docker-accessible proxy server to avoid CORS issues
 const API_BASE = 'http://172.18.0.3:3001/api';
@@ -26,6 +36,112 @@ const fetchWithAuth = async (url, options = {}) => {
 };
 
 export const api = {
+  // Static IP Management Functions
+  
+  /**
+   * Get all static IP assignments
+   */
+  async getStaticIPAssignments() {
+    try {
+      console.log('Fetching static IP assignments...');
+      return getStaticIPs();
+    } catch (error) {
+      console.error('Error fetching static IPs:', error);
+      return [];
+    }
+  },
+
+  /**
+   * Add a new static IP assignment
+   */
+  async addStaticIPAssignment(staticIPData) {
+    try {
+      console.log('Adding static IP assignment:', staticIPData);
+      
+      // Validate the data first
+      const validation = validateStaticIPData(staticIPData);
+      if (!validation.isValid) {
+        throw new Error(`Validation failed: ${validation.errors.join(', ')}`);
+      }
+      
+      // Check if IP conflicts with existing reservations or leases
+      const [reservations, leases] = await Promise.all([
+        this.getReservations(),
+        this.getLeases()
+      ]);
+      
+      const conflictingReservation = reservations.find(r => r.ip_address === staticIPData.ip_address);
+      const conflictingLease = leases.find(l => l.ip_address === staticIPData.ip_address);
+      
+      if (conflictingReservation) {
+        throw new Error(`IP address ${staticIPData.ip_address} is already reserved in DHCP`);
+      }
+      
+      if (conflictingLease) {
+        throw new Error(`IP address ${staticIPData.ip_address} has an active DHCP lease`);
+      }
+      
+      return addStaticIP(staticIPData);
+    } catch (error) {
+      console.error('Error adding static IP assignment:', error);
+      throw error;
+    }
+  },
+
+  /**
+   * Update an existing static IP assignment
+   */
+  async updateStaticIPAssignment(staticIPId, updateData) {
+    try {
+      console.log('Updating static IP assignment:', staticIPId, updateData);
+      
+      // Validate the data first
+      const validation = validateStaticIPData(updateData);
+      if (!validation.isValid) {
+        throw new Error(`Validation failed: ${validation.errors.join(', ')}`);
+      }
+      
+      // Check if new IP conflicts with existing reservations or leases (if IP is changing)
+      if (updateData.ip_address) {
+        const [reservations, leases] = await Promise.all([
+          this.getReservations(),
+          this.getLeases()
+        ]);
+        
+        const conflictingReservation = reservations.find(r => r.ip_address === updateData.ip_address);
+        const conflictingLease = leases.find(l => l.ip_address === updateData.ip_address);
+        
+        if (conflictingReservation) {
+          throw new Error(`IP address ${updateData.ip_address} is already reserved in DHCP`);
+        }
+        
+        if (conflictingLease) {
+          throw new Error(`IP address ${updateData.ip_address} has an active DHCP lease`);
+        }
+      }
+      
+      return updateStaticIP(staticIPId, updateData);
+    } catch (error) {
+      console.error('Error updating static IP assignment:', error);
+      throw error;
+    }
+  },
+
+  /**
+   * Delete a static IP assignment
+   */
+  async deleteStaticIPAssignment(staticIPId) {
+    try {
+      console.log('Deleting static IP assignment:', staticIPId);
+      return deleteStaticIP(staticIPId);
+    } catch (error) {
+      console.error('Error deleting static IP assignment:', error);
+      throw error;
+    }
+  },
+
+  // Original Kea DHCP API Functions (updated with static IP awareness)
+
   // Test authentication
   async testConnection() {
     try {
@@ -77,119 +193,16 @@ export const api = {
     }
   },
 
-  // Check if HA hook is loaded and configured
-  async checkHAConfiguration() {
-    try {
-      console.log('[HA Detection] Checking if HA hook is loaded...');
-      
-      // First, get the configuration to check for HA hook
-      const response = await fetchWithAuth(`${API_BASE}`, {
-        method: 'POST',
-        body: JSON.stringify({
-          "command": "config-get",
-          "service": ["dhcp4"]
-        })
-      });
-
-      const data = await response.json();
-      
-      if (data[0] && data[0].result === 0) {
-        const config = data[0].arguments;
-        
-        // Check if HA hook is configured in the hooks-libraries
-        const hooksLibraries = config.Dhcp4?.['hooks-libraries'] || [];
-        const haHookFound = hooksLibraries.some(hook => 
-          hook.library && (
-            hook.library.includes('libdhcp_ha.so') || 
-            hook.library.includes('ha') ||
-            hook.library.includes('high_availability')
-          )
-        );
-        
-        console.log('[HA Detection] Hooks libraries found:', hooksLibraries.map(h => h.library));
-        console.log('[HA Detection] HA hook found in config:', haHookFound);
-        
-        if (haHookFound) {
-          // Double-check by trying to get HA status
-          try {
-            const haTestResponse = await fetchWithAuth(`${API_BASE}`, {
-              method: 'POST',
-              body: JSON.stringify({
-                "command": "ha-heartbeat",
-                "service": ["dhcp4"],
-                "arguments": {
-                  "server-name": "server1"
-                }
-              })
-            });
-            
-            const haTestData = await haTestResponse.json();
-            
-            // If we get a proper response (even if it's an error about server name), HA is configured
-            if (haTestData[0]) {
-              console.log('[HA Detection] HA heartbeat test response:', haTestData[0].result);
-              
-              // Result 3 typically means "unsupported command" - HA not loaded
-              // Result 1 typically means "error" but command exists - HA is loaded
-              // Result 0 means success - HA is loaded and working
-              const haConfigured = haTestData[0].result !== 3;
-              
-              console.log('[HA Detection] HA is configured:', haConfigured);
-              return {
-                configured: haConfigured,
-                hookFound: haHookFound,
-                testResult: haTestData[0].result,
-                testMessage: haTestData[0].text
-              };
-            }
-          } catch (haTestError) {
-            console.log('[HA Detection] HA test failed:', haTestError.message);
-            // If the test fails, but we found the hook in config, assume HA is configured but not working
-            return {
-              configured: true,
-              hookFound: haHookFound,
-              testResult: null,
-              testMessage: 'HA hook found in config but test failed'
-            };
-          }
-        }
-        
-        console.log('[HA Detection] HA not configured - no hook found');
-        return {
-          configured: false,
-          hookFound: false,
-          testResult: null,
-          testMessage: 'HA hook not found in configuration'
-        };
-      } else {
-        console.error('[HA Detection] Failed to get configuration:', data[0]?.text);
-        return {
-          configured: false,
-          hookFound: false,
-          testResult: null,
-          testMessage: 'Failed to get server configuration'
-        };
-      }
-    } catch (error) {
-      console.error('[HA Detection] Error checking HA configuration:', error);
-      return {
-        configured: false,
-        hookFound: false,
-        testResult: null,
-        testMessage: error.message
-      };
-    }
-  },
-
-  // Fetch all data from Kea (subnet 1 by default) - UPDATED TO INCLUDE RESERVED POOL CONFIG
+  // Fetch all data from Kea including static IPs
   async fetchAllData(subnetId = 1) {
     try {
       console.log(`Fetching all data for subnet ID: ${subnetId}`);
-      const [leasesRes, reservationsRes, subnetsRes, reservedPoolRes] = await Promise.all([
+      const [leasesRes, reservationsRes, subnetsRes, reservedPoolRes, staticIPsRes] = await Promise.all([
         this.getLeases(subnetId),
         this.getReservations(subnetId),
         this.getSubnets(),
-        this.getReservedPoolConfig()
+        this.getReservedPoolConfig(),
+        this.getStaticIPAssignments()
       ]);
 
       console.log('All data fetched successfully.');
@@ -197,7 +210,8 @@ export const api = {
         leases: leasesRes || [],
         reservations: reservationsRes || [],
         subnets: subnetsRes || [],
-        reservedPool: reservedPoolRes
+        reservedPool: reservedPoolRes,
+        staticIPs: staticIPsRes || []
       };
     } catch (error) {
       console.error('Error fetching data from Kea:', error);
@@ -431,41 +445,45 @@ export const api = {
     }
   },
 
-  // Delete lease
-  async deleteLease(ipAddress) {
+  // Get next available IP for a subnet (now considers static IPs)
+  async getNextAvailableIP(subnetId) {
     try {
-      console.log(`Attempting to delete lease for IP: ${ipAddress}`); // Added log
-      const response = await fetchWithAuth(`${API_BASE}`, {
-        method: 'POST',
-        body: JSON.stringify({
-          "command": "lease4-del",
-          "service": ["dhcp4"],
-          "arguments": {
-            "ip-address": ipAddress
-          }
-        })
-      });
+      console.log(`Finding next available IP for subnet ID: ${subnetId}`);
+      const [leases, reservations, reservedPoolConfig, staticIPs] = await Promise.all([
+        this.getLeases(subnetId),
+        this.getReservations(subnetId),
+        this.getReservedPoolConfig(),
+        this.getStaticIPAssignments()
+      ]);
 
-      const data = await response.json();
-      const success = data[0] && data[0].result === 0;
-            
-      if (success) {
-        console.log(`Successfully deleted lease for ${ipAddress}`);
-      } else {
-        console.error(`Failed to delete lease: ${data[0]?.text}`);
+      // Use the enhanced utility function that considers static IPs
+      const nextIP = findNextAvailableIP(reservations, leases, staticIPs, reservedPoolConfig);
+      
+      if (!nextIP) {
+        throw new Error('No available IPs in reserved pool (considering reservations, leases, and static assignments)');
       }
-            
-      return success;
+
+      console.log(`Found available IP: ${nextIP}`);
+      return { nextAvailableIP: nextIP };
     } catch (error) {
-      console.error('Error deleting lease:', error);
+      console.error('Error finding next available IP:', error);
       throw error;
     }
   },
 
-  // Create reservation
+  // Create reservation (now checks against static IPs)
   async createReservation(reservationData) {
     try {
-      console.log(`Attempting to create reservation for IP: ${reservationData.ipv4_address}`); // Added log
+      console.log(`Attempting to create reservation for IP: ${reservationData.ipv4_address}`);
+      
+      // Check if IP conflicts with static assignments
+      const staticIPs = await this.getStaticIPAssignments();
+      const conflictingStaticIP = staticIPs.find(s => s.ip_address === reservationData.ipv4_address);
+      
+      if (conflictingStaticIP) {
+        throw new Error(`IP address ${reservationData.ipv4_address} is already assigned as a static IP`);
+      }
+      
       const response = await fetchWithAuth(`${API_BASE}`, {
         method: 'POST',
         body: JSON.stringify({
@@ -496,12 +514,51 @@ export const api = {
     }
   },
 
-  // Update/modify reservation with lease management
+  // Delete lease
+  async deleteLease(ipAddress) {
+    try {
+      console.log(`Attempting to delete lease for IP: ${ipAddress}`);
+      const response = await fetchWithAuth(`${API_BASE}`, {
+        method: 'POST',
+        body: JSON.stringify({
+          "command": "lease4-del",
+          "service": ["dhcp4"],
+          "arguments": {
+            "ip-address": ipAddress
+          }
+        })
+      });
+
+      const data = await response.json();
+      const success = data[0] && data[0].result === 0;
+            
+      if (success) {
+        console.log(`Successfully deleted lease for ${ipAddress}`);
+      } else {
+        console.error(`Failed to delete lease: ${data[0]?.text}`);
+      }
+            
+      return success;
+    } catch (error) {
+      console.error('Error deleting lease:', error);
+      throw error;
+    }
+  },
+
+  // Update/modify reservation with lease management (now checks against static IPs)
   async updateReservation(hostId, reservationData, originalData = null) {
     try {
-      console.log(`Attempting to update reservation for Host ID: ${hostId}, IP: ${reservationData.ipv4_address}`); // Added log
-      // If IP address is changing, handle lease cleanup
+      console.log(`Attempting to update reservation for Host ID: ${hostId}, IP: ${reservationData.ipv4_address}`);
+      
+      // Check if new IP conflicts with static assignments (if IP is changing)
       if (originalData && originalData.ipv4_address !== reservationData.ipv4_address) {
+        const staticIPs = await this.getStaticIPAssignments();
+        const conflictingStaticIP = staticIPs.find(s => s.ip_address === reservationData.ipv4_address);
+        
+        if (conflictingStaticIP) {
+          throw new Error(`IP address ${reservationData.ipv4_address} is already assigned as a static IP`);
+        }
+        
         console.log(`IP address changing from ${originalData.ipv4_address} to ${reservationData.ipv4_address}`);
                 
         // Step 1: Delete the old lease if it exists
@@ -557,53 +614,10 @@ export const api = {
     }
   },
 
-  // Force DHCP renewal for a specific MAC address (if supported by network)
-  async forceRenewal(macAddress) {
-    try {
-      // Note: DHCP FORCERENEW requires specific network setup and client support
-      // This is a placeholder for potential future implementation
-      console.log(`Attempting to force DHCP renewal for MAC: ${macAddress}`); // Added log
-                
-      // You could implement this using:
-      // 1. DHCP FORCERENEW packets (requires network setup)
-      // 2. Integration with network management tools
-      // 3. Custom scripts on the DHCP server
-                
-      return { success: false, message: 'DHCP FORCERENEW not implemented' };
-    } catch (error) {
-      console.error('Error forcing DHCP renewal:', error);
-      throw error;
-    }
-  },
-
-  // Reclaim IP address (delete lease and optionally force renewal)
-  async reclaimIP(ipAddress, macAddress = null) {
-    try {
-      console.log(`Attempting to reclaim IP address: ${ipAddress}`); // Added log
-                
-      // Delete the lease
-      const success = await this.deleteLease(ipAddress);
-                
-      if (success && macAddress) {
-        // Try to force the device to get a new IP
-        try {
-          await this.forceRenewal(macAddress);
-        } catch (error) {
-          console.log(`Could not force renewal: ${error.message}`);
-        }
-      }
-                
-      return success;
-    } catch (error) {
-      console.error('Error reclaiming IP:', error);
-      throw error;
-    }
-  },
-
   // Delete reservation
   async deleteReservation(reservation) {
     try {
-      console.log(`Attempting to delete reservation for IP: ${reservation.ip_address || reservation['ip-address']}`); // Added log
+      console.log(`Attempting to delete reservation for IP: ${reservation.ip_address || reservation['ip-address']}`);
       const response = await fetchWithAuth(`${API_BASE}`, {
         method: 'POST',
         body: JSON.stringify({
@@ -632,49 +646,150 @@ export const api = {
     }
   },
 
-  // Get next available IP for a subnet
-  async getNextAvailableIP(subnetId) {
+  // Force DHCP renewal for a specific MAC address (if supported by network)
+  async forceRenewal(macAddress) {
     try {
-      console.log(`Finding next available IP for subnet ID: ${subnetId}`); // Added log
-      const [leases, reservations, subnets] = await Promise.all([
-        this.getLeases(subnetId),
-        this.getReservations(subnetId),
-        this.getSubnets()
-      ]);
-
-      const subnet = subnets.find(s => s.subnet_id === parseInt(subnetId) || s.id === parseInt(subnetId));
-      if (!subnet) {
-        throw new Error('Subnet not found');
-      }
-
-      // Extract subnet range
-      const subnetPrefix = subnet.subnet_prefix || subnet.subnet;
-      const [network, cidr] = subnetPrefix.split('/');
-      const networkParts = network.split('.').map(Number);
+      // Note: DHCP FORCERENEW requires specific network setup and client support
+      // This is a placeholder for potential future implementation
+      console.log(`Attempting to force DHCP renewal for MAC: ${macAddress}`);
                 
-      // Get used IPs from leases and reservations
-      const usedIPs = new Set([
-        ...leases.map(l => l.ip_address || l['ip-address']),
-        ...reservations.map(r => r.ip_address || r['ip-address'])
-      ]);
-
-      // Find first available IP (skip network and broadcast addresses)
-      const cidrNum = parseInt(cidr);
-      const hostBits = 32 - cidrNum;
-      const maxHosts = Math.pow(2, hostBits) - 2; // Exclude network and broadcast
+      // You could implement this using:
+      // 1. DHCP FORCERENEW packets (requires network setup)
+      // 2. Integration with network management tools
+      // 3. Custom scripts on the DHCP server
                 
-      for (let i = 1; i <= maxHosts; i++) {
-        const testIP = `${networkParts[0]}.${networkParts[1]}.${networkParts[2]}.${networkParts[3] + i}`;
-        if (!usedIPs.has(testIP)) {
-          console.log(`Found available IP: ${testIP}`);
-          return { nextAvailableIP: testIP };
+      return { success: false, message: 'DHCP FORCERENEW not implemented' };
+    } catch (error) {
+      console.error('Error forcing DHCP renewal:', error);
+      throw error;
+    }
+  },
+
+  // Reclaim IP address (delete lease and optionally force renewal)
+  async reclaimIP(ipAddress, macAddress = null) {
+    try {
+      console.log(`Attempting to reclaim IP address: ${ipAddress}`);
+                
+      // Delete the lease
+      const success = await this.deleteLease(ipAddress);
+                
+      if (success && macAddress) {
+        // Try to force the device to get a new IP
+        try {
+          await this.forceRenewal(macAddress);
+        } catch (error) {
+          console.log(`Could not force renewal: ${error.message}`);
         }
       }
-
-      throw new Error('No available IPs in subnet');
+                
+      return success;
     } catch (error) {
-      console.error('Error finding next available IP:', error);
+      console.error('Error reclaiming IP:', error);
       throw error;
+    }
+  },
+
+  // HA Configuration and Status Functions (unchanged)
+  async checkHAConfiguration() {
+    try {
+      console.log('[HA Detection] Checking if HA hook is loaded...');
+      
+      // First, get the configuration to check for HA hook
+      const response = await fetchWithAuth(`${API_BASE}`, {
+        method: 'POST',
+        body: JSON.stringify({
+          "command": "config-get",
+          "service": ["dhcp4"]
+        })
+      });
+
+      const data = await response.json();
+      
+      if (data[0] && data[0].result === 0) {
+        const config = data[0].arguments;
+        
+        // Check if HA hook is configured in the hooks-libraries
+        const hooksLibraries = config.Dhcp4?.['hooks-libraries'] || [];
+        const haHookFound = hooksLibraries.some(hook => 
+          hook.library && (
+            hook.library.includes('libdhcp_ha.so') || 
+            hook.library.includes('ha') ||
+            hook.library.includes('high_availability')
+          )
+        );
+        
+        console.log('[HA Detection] Hooks libraries found:', hooksLibraries.map(h => h.library));
+        console.log('[HA Detection] HA hook found in config:', haHookFound);
+        
+        if (haHookFound) {
+          // Double-check by trying to get HA status
+          try {
+            const haTestResponse = await fetchWithAuth(`${API_BASE}`, {
+              method: 'POST',
+              body: JSON.stringify({
+                "command": "ha-heartbeat",
+                "service": ["dhcp4"],
+                "arguments": {
+                  "server-name": "server1"
+                }
+              })
+            });
+            
+            const haTestData = await haTestResponse.json();
+            
+            // If we get a proper response (even if it's an error about server name), HA is configured
+            if (haTestData[0]) {
+              console.log('[HA Detection] HA heartbeat test response:', haTestData[0].result);
+              
+              // Result 3 typically means "unsupported command" - HA not loaded
+              // Result 1 typically means "error" but command exists - HA is loaded
+              // Result 0 means success - HA is loaded and working
+              const haConfigured = haTestData[0].result !== 3;
+              
+              console.log('[HA Detection] HA is configured:', haConfigured);
+              return {
+                configured: haConfigured,
+                hookFound: haHookFound,
+                testResult: haTestData[0].result,
+                testMessage: haTestData[0].text
+              };
+            }
+          } catch (haTestError) {
+            console.log('[HA Detection] HA test failed:', haTestError.message);
+            // If the test fails, but we found the hook in config, assume HA is configured but not working
+            return {
+              configured: true,
+              hookFound: haHookFound,
+              testResult: null,
+              testMessage: 'HA hook found in config but test failed'
+            };
+          }
+        }
+        
+        console.log('[HA Detection] HA not configured - no hook found');
+        return {
+          configured: false,
+          hookFound: false,
+          testResult: null,
+          testMessage: 'HA hook not found in configuration'
+        };
+      } else {
+        console.error('[HA Detection] Failed to get configuration:', data[0]?.text);
+        return {
+          configured: false,
+          hookFound: false,
+          testResult: null,
+          testMessage: 'Failed to get server configuration'
+        };
+      }
+    } catch (error) {
+      console.error('[HA Detection] Error checking HA configuration:', error);
+      return {
+        configured: false,
+        hookFound: false,
+        testResult: null,
+        testMessage: error.message
+      };
     }
   },
 
