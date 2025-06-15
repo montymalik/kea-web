@@ -1,8 +1,9 @@
-// proxy-server.js - Updated with environment configuration
+// proxy-server.js - Updated with SQLite static IP routes
 const express = require('express');
 const cors = require('cors');
 const fetch = require('node-fetch');
-const config = require('./config'); // Import configuration
+const config = require('./config');
+const staticIPRoutes = require('./static-ip-routes'); // Import the new routes
 
 const app = express();
 
@@ -37,11 +38,15 @@ app.get('/health', (req, res) => {
     dockerInfo: {
       hostname: require('os').hostname(),
       platform: require('os').platform()
+    },
+    features: {
+      staticIPManagement: true,
+      database: 'PostgreSQL'
     }
   });
 });
 
-// New endpoint to get reserved pool configuration
+// Reserved pool configuration endpoint
 app.get('/config/reserved-pool', (req, res) => {
   console.log('Reserved pool configuration requested');
   res.json({
@@ -51,20 +56,29 @@ app.get('/config/reserved-pool', (req, res) => {
   });
 });
 
+// Mount static IP routes under /api
+app.use('/api', staticIPRoutes);
+
 // Test endpoint
 app.get('/test', (req, res) => {
   res.json({ 
     message: 'Docker proxy server is working (no auth)!',
     requestFrom: req.ip,
     headers: req.headers,
-    reservedPoolConfig: config.reservedPool
+    reservedPoolConfig: config.reservedPool,
+    staticIPSupport: true
   });
 });
 
-// Proxy all /api requests to Kea (no authentication)
-app.all('/api/*', async (req, res) => {
+// Proxy all /api requests to Kea (except our static IP routes)
+app.all('/api/*', async (req, res, next) => {
+  // Skip Kea proxy for static IP routes
+  if (req.path.startsWith('/api/static-ips')) {
+    return next(); // Let static IP routes handle it
+  }
+  
   try {
-    console.log(`Proxying: ${req.method} ${req.path} from ${req.ip}`);
+    console.log(`Proxying to Kea: ${req.method} ${req.path} from ${req.ip}`);
     
     const keaUrl = KEA_SERVER + '/';
     
@@ -105,7 +119,7 @@ app.all('/api/*', async (req, res) => {
   }
 });
 
-// Handle root API requests
+// Handle root API requests to Kea
 app.all('/api', async (req, res) => {
   try {
     console.log(`Proxying root: ${req.method} /api from ${req.ip}`);
@@ -152,7 +166,13 @@ app.all('*', (req, res) => {
     error: 'Route not found',
     method: req.method,
     path: req.path,
-    availableRoutes: ['/health', '/test', '/api', '/config/reserved-pool']
+    availableRoutes: [
+      '/health', 
+      '/test', 
+      '/api', 
+      '/config/reserved-pool',
+      '/api/static-ips'
+    ]
   });
 });
 
@@ -160,9 +180,12 @@ app.all('*', (req, res) => {
 app.listen(PORT, HOST, () => {
   console.log(`Docker CORS Proxy server running on http://${HOST}:${PORT}`);
   console.log(`Accessible from host at: http://172.18.0.3:${PORT}`);
-  console.log(`Proxying requests to: ${KEA_SERVER}`);
+  console.log(`Proxying Kea requests to: ${KEA_SERVER}`);
+  console.log(`Static IP management: PostgreSQL database enabled`);
   console.log(`Reserved Pool: ${config.reservedPool.range} (${config.reservedPool.total} IPs)`);
-  console.log(`Test the proxy: http://172.18.0.3:${PORT}/test`);
-  console.log(`Health check: http://172.18.0.3:${PORT}/health`);
-  console.log(`Reserved pool config: http://172.18.0.3:${PORT}/config/reserved-pool`);
+  console.log('Available endpoints:');
+  console.log(`  - Health check: http://172.18.0.3:${PORT}/health`);
+  console.log(`  - Test endpoint: http://172.18.0.3:${PORT}/test`);
+  console.log(`  - Reserved pool config: http://172.18.0.3:${PORT}/config/reserved-pool`);
+  console.log(`  - Static IPs API: http://172.18.0.3:${PORT}/api/static-ips`);
 });

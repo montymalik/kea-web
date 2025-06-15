@@ -1,13 +1,5 @@
-// api.js - Updated Kea DHCP API service with Static IP support
+// api.js - Kea DHCP API service with PostgreSQL static IP backend
 
-import { 
-  getStaticIPs, 
-  addStaticIP, 
-  updateStaticIP, 
-  deleteStaticIP, 
-  validateStaticIPData,
-  isStaticIPAssigned 
-} from './staticIPAPI';
 import { findNextAvailableIP } from '../utils/utils';
 
 // Use Docker-accessible proxy server to avoid CORS issues
@@ -26,25 +18,33 @@ const fetchWithAuth = async (url, options = {}) => {
   const response = await fetch(url, config);
     
   if (!response.ok) {
-    // Log non-2xx HTTP responses more verbosely
-    const errorBody = await response.text(); // Try to get the error body
+    const errorBody = await response.text();
     console.error(`[API Request Error] HTTP error! Status: ${response.status} ${response.statusText} for URL: ${url}. Response body: ${errorBody}`);
-    throw new Error(`API request failed: ${response.status} ${response.statusText}. Details: ${errorBody.substring(0, 200)}...`); // Limit error body length
+    throw new Error(`API request failed: ${response.status} ${response.statusText}. Details: ${errorBody.substring(0, 200)}...`);
   }
     
   return response;
 };
 
 export const api = {
-  // Static IP Management Functions
+  // Static IP Management Functions (using PostgreSQL backend)
   
   /**
-   * Get all static IP assignments
+   * Get all static IP assignments from PostgreSQL database
    */
   async getStaticIPAssignments() {
     try {
-      console.log('Fetching static IP assignments...');
-      return getStaticIPs();
+      console.log('Fetching static IP assignments from PostgreSQL...');
+      const response = await fetchWithAuth(`${API_BASE}/static-ips`);
+      const data = await response.json();
+      
+      if (data.success) {
+        console.log(`Fetched ${data.staticIPs.length} static IP assignments from database`);
+        return data.staticIPs;
+      } else {
+        console.error('Failed to fetch static IPs:', data.error);
+        return [];
+      }
     } catch (error) {
       console.error('Error fetching static IPs:', error);
       return [];
@@ -52,17 +52,11 @@ export const api = {
   },
 
   /**
-   * Add a new static IP assignment
+   * Add a new static IP assignment to PostgreSQL database
    */
   async addStaticIPAssignment(staticIPData) {
     try {
-      console.log('Adding static IP assignment:', staticIPData);
-      
-      // Validate the data first
-      const validation = validateStaticIPData(staticIPData);
-      if (!validation.isValid) {
-        throw new Error(`Validation failed: ${validation.errors.join(', ')}`);
-      }
+      console.log('Adding static IP assignment to database:', staticIPData);
       
       // Check if IP conflicts with existing reservations or leases
       const [reservations, leases] = await Promise.all([
@@ -81,7 +75,20 @@ export const api = {
         throw new Error(`IP address ${staticIPData.ip_address} has an active DHCP lease`);
       }
       
-      return addStaticIP(staticIPData);
+      // Send to backend
+      const response = await fetchWithAuth(`${API_BASE}/static-ips`, {
+        method: 'POST',
+        body: JSON.stringify(staticIPData)
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        console.log('Static IP added successfully:', data.staticIP);
+        return data.staticIP;
+      } else {
+        throw new Error(data.error || 'Failed to add static IP');
+      }
     } catch (error) {
       console.error('Error adding static IP assignment:', error);
       throw error;
@@ -89,17 +96,11 @@ export const api = {
   },
 
   /**
-   * Update an existing static IP assignment
+   * Update an existing static IP assignment in PostgreSQL database
    */
   async updateStaticIPAssignment(staticIPId, updateData) {
     try {
-      console.log('Updating static IP assignment:', staticIPId, updateData);
-      
-      // Validate the data first
-      const validation = validateStaticIPData(updateData);
-      if (!validation.isValid) {
-        throw new Error(`Validation failed: ${validation.errors.join(', ')}`);
-      }
+      console.log('Updating static IP assignment in database:', staticIPId, updateData);
       
       // Check if new IP conflicts with existing reservations or leases (if IP is changing)
       if (updateData.ip_address) {
@@ -120,7 +121,20 @@ export const api = {
         }
       }
       
-      return updateStaticIP(staticIPId, updateData);
+      // Send to backend
+      const response = await fetchWithAuth(`${API_BASE}/static-ips/${staticIPId}`, {
+        method: 'PUT',
+        body: JSON.stringify(updateData)
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        console.log('Static IP updated successfully:', data.staticIP);
+        return data.staticIP;
+      } else {
+        throw new Error(data.error || 'Failed to update static IP');
+      }
     } catch (error) {
       console.error('Error updating static IP assignment:', error);
       throw error;
@@ -128,24 +142,60 @@ export const api = {
   },
 
   /**
-   * Delete a static IP assignment
+   * Delete a static IP assignment from PostgreSQL database
    */
   async deleteStaticIPAssignment(staticIPId) {
     try {
-      console.log('Deleting static IP assignment:', staticIPId);
-      return deleteStaticIP(staticIPId);
+      console.log('Deleting static IP assignment from database:', staticIPId);
+      
+      const response = await fetchWithAuth(`${API_BASE}/static-ips/${staticIPId}`, {
+        method: 'DELETE'
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        console.log('Static IP deleted successfully');
+        return true;
+      } else {
+        throw new Error(data.error || 'Failed to delete static IP');
+      }
     } catch (error) {
       console.error('Error deleting static IP assignment:', error);
       throw error;
     }
   },
 
-  // Original Kea DHCP API Functions (updated with static IP awareness)
+  /**
+   * Check if an IP address is already assigned as a static IP
+   */
+  async checkStaticIPExists(ipAddress) {
+    try {
+      console.log('Checking if static IP exists:', ipAddress);
+      
+      const response = await fetchWithAuth(`${API_BASE}/static-ips/check/${ipAddress}`);
+      const data = await response.json();
+      
+      if (data.success) {
+        return {
+          exists: data.exists,
+          staticIP: data.staticIP
+        };
+      } else {
+        throw new Error(data.error || 'Failed to check static IP');
+      }
+    } catch (error) {
+      console.error('Error checking static IP:', error);
+      return { exists: false, staticIP: null };
+    }
+  },
+
+  // Original Kea DHCP API Functions
 
   // Test authentication
   async testConnection() {
     try {
-      console.log('Testing API connection...'); // Added log
+      console.log('Testing API connection...');
       const response = await fetchWithAuth(`${API_BASE}`, {
         method: 'POST',
         body: JSON.stringify({
@@ -153,8 +203,8 @@ export const api = {
           "service": ["dhcp4"]
         })
       });
-      const data = await response.json(); // Parse response for success
-      console.log('Connection test successful. Response:', JSON.stringify(data, null, 2)); // Log successful response
+      const data = await response.json();
+      console.log('Connection test successful. Response:', JSON.stringify(data, null, 2));
       return response.ok;
     } catch (error) {
       console.error('Connection test failed:', error);
@@ -183,7 +233,6 @@ export const api = {
       }
     } catch (error) {
       console.error('Error fetching reserved pool config:', error);
-      // Return default configuration
       return {
         range: '192.168.1.2 - 192.168.1.100',
         startIP: '192.168.1.2',
@@ -193,7 +242,7 @@ export const api = {
     }
   },
 
-  // Fetch all data from Kea including static IPs
+  // Fetch all data from Kea including static IPs from PostgreSQL
   async fetchAllData(subnetId = 1) {
     try {
       console.log(`Fetching all data for subnet ID: ${subnetId}`);
@@ -205,7 +254,7 @@ export const api = {
         this.getStaticIPAssignments()
       ]);
 
-      console.log('All data fetched successfully.');
+      console.log('All data fetched successfully from Kea and PostgreSQL.');
       return {
         leases: leasesRes || [],
         reservations: reservationsRes || [],
@@ -214,7 +263,7 @@ export const api = {
         staticIPs: staticIPsRes || []
       };
     } catch (error) {
-      console.error('Error fetching data from Kea:', error);
+      console.error('Error fetching data from Kea and PostgreSQL:', error);
       throw error;
     }
   },
@@ -222,8 +271,7 @@ export const api = {
   // Get active leases for a specific subnet
   async getLeases(subnetId = 1) {
     try {
-      console.log(`Fetching leases for subnet ID: ${subnetId}`); // Added log
-      // Use lease4-get-all without arguments to get complete lease data
+      console.log(`Fetching leases for subnet ID: ${subnetId}`);
       const response = await fetchWithAuth(`${API_BASE}`, {
         method: 'POST',
         body: JSON.stringify({
@@ -237,20 +285,17 @@ export const api = {
       if (data[0] && data[0].result === 0) {
         let leases = data[0].arguments.leases || [];
                 
-        // Debug: log the first lease to see complete structure
         if (leases.length > 0) {
           console.log('Complete lease data structure (first lease):', JSON.stringify(leases[0], null, 2));
         }
                 
-        // Filter by subnet client-side if subnet specified
         if (subnetId) {
           leases = leases.filter(lease => lease['subnet-id'] === parseInt(subnetId));
         }
                 
-        console.log(`Found ${leases.length} leases in subnet ${subnetId} (after client-side filter)`); // Updated log
+        console.log(`Found ${leases.length} leases in subnet ${subnetId} (after client-side filter)`);
                 
         return leases.map(lease => ({
-          // Normalize property names for consistency
           ip_address: lease['ip-address'],
           mac_address: lease['hw-address'],
           hostname: lease.hostname || '',
@@ -259,7 +304,6 @@ export const api = {
           valid_lft: lease['valid-lft'],
           expires_at: lease.expire,
           status: lease.state === 0 ? 'Active' : 'Inactive',
-          // Keep original format for compatibility
           'ip-address': lease['ip-address'],
           'hw-address': lease['hw-address'],
           'subnet-id': lease['subnet-id'],
@@ -281,7 +325,7 @@ export const api = {
   // Get reservations for a specific subnet
   async getReservations(subnetId = 1) {
     try {
-      console.log(`Fetching reservations for subnet ID: ${subnetId}`); // Added log
+      console.log(`Fetching reservations for subnet ID: ${subnetId}`);
       const response = await fetchWithAuth(`${API_BASE}`, {
         method: 'POST',
         body: JSON.stringify({
@@ -299,13 +343,11 @@ export const api = {
         const reservations = data[0].arguments.hosts || [];
         console.log(`Found ${reservations.length} reservations in subnet ${subnetId}`);
         return reservations.map(reservation => ({
-          // Normalize property names for consistency
           host_id: reservation['host-id'] || reservation.identifier,
           subnet_id: reservation['subnet-id'],
           ip_address: reservation['ip-address'],
           mac_address: reservation['hw-address'] || reservation.identifier,
           hostname: reservation.hostname || '',
-          // Keep original format for compatibility
           'host-id': reservation['host-id'],
           'subnet-id': reservation['subnet-id'],
           'ip-address': reservation['ip-address'],
@@ -320,11 +362,10 @@ export const api = {
     }
   },
 
-  // Get subnets (fallback to config since subnet4-list not supported)
+  // Get subnets
   async getSubnets() {
     try {
-      console.log('Fetching subnet configuration...'); // Added log
-      // Since subnet4-list is not supported, get subnets from config
+      console.log('Fetching subnet configuration...');
       const response = await fetchWithAuth(`${API_BASE}`, {
         method: 'POST',
         body: JSON.stringify({
@@ -336,7 +377,6 @@ export const api = {
       const data = await response.json();
             
       if (data[0] && data[0].result === 0) {
-        // Extract subnets from configuration
         const config = data[0].arguments;
         const subnets = [];
                 
@@ -344,7 +384,6 @@ export const api = {
           config.Dhcp4.subnet4.forEach(subnet => {
             console.log('Processing subnet from config:', JSON.stringify(subnet, null, 2));
                         
-            // Extract pool information for accurate IP counting
             let pools = [];
             if (subnet.pools && Array.isArray(subnet.pools)) {
               console.log('Found pools in subnet:', subnet.pools);
@@ -353,22 +392,16 @@ export const api = {
                 console.log('Processing pool config:', poolConfig);
                         
                 if (poolConfig.pool) {
-                  // Parse pool range - handle both formats:
-                  // "192.168.1.100 - 192.168.1.214" (with spaces)
-                  // "192.168.1.100-192.168.1.214" (without spaces)
                   const poolRange = poolConfig.pool.trim();
                   let startIP, endIP;
                             
-                  // Try format with spaces first
                   if (poolRange.includes(' - ')) {
                     const parts = poolRange.split(' - ');
                     if (parts.length === 2) {
                       startIP = parts[0].trim();
                       endIP = parts[1].trim();
                     }
-                  }
-                  // Try format without spaces
-                  else if (poolRange.includes('-')) {
+                  } else if (poolRange.includes('-')) {
                     const parts = poolRange.split('-');
                     if (parts.length === 2) {
                       startIP = parts[0].trim();
@@ -400,11 +433,9 @@ export const api = {
             console.log('Final pools for subnet:', pools);
                         
             subnets.push({
-              // Normalize property names for consistency
               subnet_id: subnet.id,
               subnet_prefix: subnet.subnet,
-              pools: pools, // Add pool information
-              // Keep original format for compatibility
+              pools: pools,
               id: subnet.id,
               subnet: subnet.subnet
             });
@@ -415,7 +446,6 @@ export const api = {
         return subnets;
       } else {
         console.warn('config-get failed, using default subnet');
-        // Return default subnet if config-get fails
         return [{
           subnet_id: 1,
           subnet_prefix: '192.168.1.0/24',
@@ -430,7 +460,6 @@ export const api = {
       }
     } catch (error) {
       console.error('Error fetching subnets:', error);
-      // Return default subnet on error
       return [{
         subnet_id: 1,
         subnet_prefix: '192.168.1.0/24',
@@ -445,7 +474,7 @@ export const api = {
     }
   },
 
-  // Get next available IP for a subnet (now considers static IPs)
+  // Get next available IP for a subnet (considers static IPs)
   async getNextAvailableIP(subnetId) {
     try {
       console.log(`Finding next available IP for subnet ID: ${subnetId}`);
@@ -456,7 +485,6 @@ export const api = {
         this.getStaticIPAssignments()
       ]);
 
-      // Use the enhanced utility function that considers static IPs
       const nextIP = findNextAvailableIP(reservations, leases, staticIPs, reservedPoolConfig);
       
       if (!nextIP) {
@@ -471,16 +499,14 @@ export const api = {
     }
   },
 
-  // Create reservation (now checks against static IPs)
+  // Create reservation (checks against static IPs)
   async createReservation(reservationData) {
     try {
       console.log(`Attempting to create reservation for IP: ${reservationData.ipv4_address}`);
       
-      // Check if IP conflicts with static assignments
-      const staticIPs = await this.getStaticIPAssignments();
-      const conflictingStaticIP = staticIPs.find(s => s.ip_address === reservationData.ipv4_address);
+      const staticIPCheck = await this.checkStaticIPExists(reservationData.ipv4_address);
       
-      if (conflictingStaticIP) {
+      if (staticIPCheck.exists) {
         throw new Error(`IP address ${reservationData.ipv4_address} is already assigned as a static IP`);
       }
       
@@ -545,34 +571,29 @@ export const api = {
     }
   },
 
-  // Update/modify reservation with lease management (now checks against static IPs)
+  // Update/modify reservation with lease management (checks against static IPs)
   async updateReservation(hostId, reservationData, originalData = null) {
     try {
       console.log(`Attempting to update reservation for Host ID: ${hostId}, IP: ${reservationData.ipv4_address}`);
       
-      // Check if new IP conflicts with static assignments (if IP is changing)
       if (originalData && originalData.ipv4_address !== reservationData.ipv4_address) {
-        const staticIPs = await this.getStaticIPAssignments();
-        const conflictingStaticIP = staticIPs.find(s => s.ip_address === reservationData.ipv4_address);
+        const staticIPCheck = await this.checkStaticIPExists(reservationData.ipv4_address);
         
-        if (conflictingStaticIP) {
+        if (staticIPCheck.exists) {
           throw new Error(`IP address ${reservationData.ipv4_address} is already assigned as a static IP`);
         }
         
         console.log(`IP address changing from ${originalData.ipv4_address} to ${reservationData.ipv4_address}`);
                 
-        // Step 1: Delete the old lease if it exists
         try {
           console.log(`Attempting to delete old lease for ${originalData.ipv4_address}`);
           await this.deleteLease(originalData.ipv4_address);
           console.log(`Successfully deleted old lease for ${originalData.ipv4_address}`);
         } catch (error) {
           console.log(`Old lease deletion failed (may not exist): ${error.message}`);
-          // Continue anyway - lease might not exist
         }
       }
 
-      // Step 2: Update the reservation
       const response = await fetchWithAuth(`${API_BASE}`, {
         method: 'POST',
         body: JSON.stringify({
@@ -594,13 +615,11 @@ export const api = {
       if (data[0] && data[0].result === 0) {
         console.log(`Successfully updated reservation for ${reservationData.ipv4_address}`);
                 
-        // Step 3: If IP changed, try to force DHCP renewal (if supported)
         if (originalData && originalData.ipv4_address !== reservationData.ipv4_address) {
           try {
             await this.forceRenewal(reservationData.dhcp_identifier);
           } catch (error) {
             console.log(`DHCP renewal force failed: ${error.message}`);
-            // Not critical - continue
           }
         }
                 
@@ -646,18 +665,10 @@ export const api = {
     }
   },
 
-  // Force DHCP renewal for a specific MAC address (if supported by network)
+  // Force DHCP renewal (placeholder)
   async forceRenewal(macAddress) {
     try {
-      // Note: DHCP FORCERENEW requires specific network setup and client support
-      // This is a placeholder for potential future implementation
       console.log(`Attempting to force DHCP renewal for MAC: ${macAddress}`);
-                
-      // You could implement this using:
-      // 1. DHCP FORCERENEW packets (requires network setup)
-      // 2. Integration with network management tools
-      // 3. Custom scripts on the DHCP server
-                
       return { success: false, message: 'DHCP FORCERENEW not implemented' };
     } catch (error) {
       console.error('Error forcing DHCP renewal:', error);
@@ -665,36 +676,11 @@ export const api = {
     }
   },
 
-  // Reclaim IP address (delete lease and optionally force renewal)
-  async reclaimIP(ipAddress, macAddress = null) {
-    try {
-      console.log(`Attempting to reclaim IP address: ${ipAddress}`);
-                
-      // Delete the lease
-      const success = await this.deleteLease(ipAddress);
-                
-      if (success && macAddress) {
-        // Try to force the device to get a new IP
-        try {
-          await this.forceRenewal(macAddress);
-        } catch (error) {
-          console.log(`Could not force renewal: ${error.message}`);
-        }
-      }
-                
-      return success;
-    } catch (error) {
-      console.error('Error reclaiming IP:', error);
-      throw error;
-    }
-  },
-
-  // HA Configuration and Status Functions (unchanged)
+  // HA Configuration functions
   async checkHAConfiguration() {
     try {
       console.log('[HA Detection] Checking if HA hook is loaded...');
       
-      // First, get the configuration to check for HA hook
       const response = await fetchWithAuth(`${API_BASE}`, {
         method: 'POST',
         body: JSON.stringify({
@@ -708,7 +694,6 @@ export const api = {
       if (data[0] && data[0].result === 0) {
         const config = data[0].arguments;
         
-        // Check if HA hook is configured in the hooks-libraries
         const hooksLibraries = config.Dhcp4?.['hooks-libraries'] || [];
         const haHookFound = hooksLibraries.some(hook => 
           hook.library && (
@@ -722,7 +707,6 @@ export const api = {
         console.log('[HA Detection] HA hook found in config:', haHookFound);
         
         if (haHookFound) {
-          // Double-check by trying to get HA status
           try {
             const haTestResponse = await fetchWithAuth(`${API_BASE}`, {
               method: 'POST',
@@ -737,13 +721,9 @@ export const api = {
             
             const haTestData = await haTestResponse.json();
             
-            // If we get a proper response (even if it's an error about server name), HA is configured
             if (haTestData[0]) {
               console.log('[HA Detection] HA heartbeat test response:', haTestData[0].result);
               
-              // Result 3 typically means "unsupported command" - HA not loaded
-              // Result 1 typically means "error" but command exists - HA is loaded
-              // Result 0 means success - HA is loaded and working
               const haConfigured = haTestData[0].result !== 3;
               
               console.log('[HA Detection] HA is configured:', haConfigured);
@@ -756,7 +736,6 @@ export const api = {
             }
           } catch (haTestError) {
             console.log('[HA Detection] HA test failed:', haTestError.message);
-            // If the test fails, but we found the hook in config, assume HA is configured but not working
             return {
               configured: true,
               hookFound: haHookFound,
@@ -793,9 +772,9 @@ export const api = {
     }
   },
 
-  // HA Heartbeat monitoring functions
+  // HA Heartbeat monitoring
   async getHAHeartbeat(serverName = null) {
-    const actualServerName = serverName || "unknown-server"; // Fallback if serverName is null
+    const actualServerName = serverName || "unknown-server";
 
     try {
       const requestBody = {
@@ -815,7 +794,6 @@ export const api = {
 
       const data = await response.json();
       
-      // *** ADDED LOG FOR SUCCESSFUL RAW RESPONSE HERE ***
       console.log(`[HA Heartbeat] Raw response for ${actualServerName}:`, JSON.stringify(data, null, 2)); 
             
       if (data[0] && data[0].result === 0) {
@@ -831,7 +809,7 @@ export const api = {
         };
       } else {
         const errorMessage = data[0]?.text || 'Unknown error during heartbeat';
-        console.error(`[HA Heartbeat] Failed for ${actualServerName}: ${errorMessage}. Full response:`, JSON.stringify(data, null, 2)); // Log full data on failure
+        console.error(`[HA Heartbeat] Failed for ${actualServerName}: ${errorMessage}. Full response:`, JSON.stringify(data, null, 2));
         return {
           success: false,
           error: errorMessage,
@@ -840,8 +818,7 @@ export const api = {
         };
       }
     } catch (error) {
-      // *** IMPROVED LOG FOR NETWORK/FETCH ERRORS HERE ***
-      console.error(`[HA Heartbeat] Error getting heartbeat for ${actualServerName}:`, error.message, error); // Log message and full error object
+      console.error(`[HA Heartbeat] Error getting heartbeat for ${actualServerName}:`, error.message, error);
       return {
         success: false,
         error: error.message,
@@ -851,12 +828,11 @@ export const api = {
     }
   },
 
-  // Check HA status for both servers in the pair (only if HA is configured)
+  // Check HA status
   async getHAStatus() {
     try {
       console.log('--- Starting HA Status Check ---');
       
-      // First check if HA is configured
       const haConfig = await this.checkHAConfiguration();
       console.log('[HA Status] HA Configuration check result:', haConfig);
       
@@ -878,15 +854,13 @@ export const api = {
       
       console.log('[HA Status] HA is configured, proceeding with status check');
             
-      const [server1Status, server2Status] = await Promise.allSettled([ // Use Promise.allSettled to ensure both promises run
+      const [server1Status, server2Status] = await Promise.allSettled([
         this.getHAHeartbeat('server1'),
         this.getHAHeartbeat('server2')
       ]);
 
-      // *** ADDED LOGS FOR RESOLVED/REJECTED PROMISES HERE ***
       console.log('[HA Status] Server 1 Promise result:', JSON.stringify(server1Status, null, 2));
       console.log('[HA Status] Server 2 Promise result:', JSON.stringify(server2Status, null, 2));
-      // --- END ADDED LOGS ---
 
       const processedServer1Status = server1Status.status === 'fulfilled' ? server1Status.value : { success: false, serverName: 'server1', error: server1Status.reason?.message || 'Promise rejected' };
       const processedServer2Status = server2Status.status === 'fulfilled' ? server2Status.value : { success: false, serverName: 'server2', error: server2Status.reason?.message || 'Promise rejected' };
@@ -920,7 +894,7 @@ export const api = {
     }
   },
 
-  // Evaluate overall HA health based on server responses
+  // Evaluate overall HA health
   evaluateHAStatus(serverStatuses) {
     console.log('[HA Evaluation] Starting evaluation with:', JSON.stringify(serverStatuses, null, 2));
             
@@ -929,7 +903,6 @@ export const api = {
 
     console.log(`[HA Evaluation] Successful servers: ${successfulServers.length}, Failed servers: ${failedServers.length}`);
 
-    // If we can't reach any servers, critical error
     if (successfulServers.length === 0) {
       console.log('[HA Evaluation] No successful servers - overall status: critical');
       return {
@@ -940,47 +913,37 @@ export const api = {
       };
     }
 
-    // Get all states from successful servers
     const states = successfulServers.map(s => s.state).filter(state => state);
             
     console.log('[HA Evaluation] HA States detected from successful servers:', states);
 
-    // Determine overall status based on the states
-    let overallStatus = 'warning'; // Default to warning instead of healthy
+    let overallStatus = 'warning';
     let statusMessage = 'HA cluster status unknown';
     let statusDetails = '';
 
-    // Check for any partner-down states (RED)
     if (states.includes('partner-down')) {
       console.log('[HA Evaluation] Detected "partner-down" state - setting overall to critical.');
       overallStatus = 'critical';
       statusMessage = 'Partner down detected';
       statusDetails = 'One or more servers report partner-down state';
-    }
-    // Check for healthy states (GREEN): hot-standby, load-balancing, backup
-    else if (states.some(state => ['hot-standby', 'load-balancing', 'backup'].includes(state))) {
+    } else if (states.some(state => ['hot-standby', 'load-balancing', 'backup'].includes(state))) {
       const healthyStates = states.filter(state => ['hot-standby', 'load-balancing', 'backup'].includes(state));
       console.log(`[HA Evaluation] Detected healthy states: ${healthyStates.join(', ')} - setting overall to healthy.`);
       overallStatus = 'healthy';
       statusMessage = 'HA cluster is healthy';
       statusDetails = `Server states: ${healthyStates.join(', ')}`;
-    }
-    // Any other states (YELLOW)
-    else if (states.length > 0) {
+    } else if (states.length > 0) {
       console.log(`[HA Evaluation] Detected other states: ${states.join(', ')} - setting overall to warning.`);
       overallStatus = 'warning';
       statusMessage = 'HA cluster in transition or unknown state';
       statusDetails = `Server states: ${states.join(', ')}`;
-    }
-    // No states detected
-    else {
+    } else {
       console.log('[HA Evaluation] No HA states detected - setting overall to warning.');
       overallStatus = 'warning';
       statusMessage = 'No HA states detected';
       statusDetails = 'Servers responded but no states were found';
     }
 
-    // Check for communication issues
     if (failedServers.length > 0) {
       if (overallStatus === 'healthy') {
         overallStatus = 'warning';
@@ -989,7 +952,6 @@ export const api = {
       console.log(`[HA Evaluation] Added warning: ${failedServers.length} server(s) unreachable.`);
     }
 
-    // Check unsent update counts for additional warnings
     const unsentCounts = successfulServers.map(s => s.unsentUpdateCount || 0);
     const maxUnsentCount = Math.max(...unsentCounts);
             
@@ -1005,7 +967,7 @@ export const api = {
                  overallStatus === 'warning' ? 'medium' : 'none',
       message: statusMessage,
       details: statusDetails,
-      states: states, // Include detected states for debugging
+      states: states,
       debugInfo: {
         successfulServers: successfulServers.length,
         failedServers: failedServers.length,
