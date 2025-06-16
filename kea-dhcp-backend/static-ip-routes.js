@@ -1,4 +1,4 @@
-// static-ip-routes.js - Fixed version without integer overflow in sorting
+// static-ip-routes.js - Updated with enhanced error messages and fixed sorting
 const express = require('express');
 const { Pool } = require('pg');
 const fetch = require('node-fetch');
@@ -59,48 +59,75 @@ async function checkDHCPReservations(ipAddress) {
   }
 }
 
-// GET /api/static-ips - Get all static IP assignments with fixed sorting
+// GET /api/static-ips - Get all static IP assignments with robust sorting and data validation
 router.get('/static-ips', async (req, res) => {
   try {
     console.log('Fetching all static IP assignments...');
     
-    // Use a simpler sorting approach that doesn't cause integer overflow
+    // First, try to get all data and validate IP addresses
     const result = await pool.query(`
       SELECT id, ip_address, mac_address, hostname, description, 
              created_at, updated_at 
-      FROM static_ips 
-      ORDER BY 
-        string_to_array(ip_address, '.')::int[] 
+      FROM static_ips
     `);
     
     console.log(`Found ${result.rows.length} static IP assignments`);
     
+    // Validate and clean up IP addresses, then sort in JavaScript
+    const staticIPs = result.rows.map(row => {
+      // Clean up IP address - remove any invalid characters
+      if (row.ip_address) {
+        row.ip_address = row.ip_address.replace(/[^0-9.]/g, '');
+      }
+      return row;
+    });
+    
+    // Sort IP addresses properly in JavaScript
+    staticIPs.sort((a, b) => {
+      const ipA = a.ip_address || '';
+      const ipB = b.ip_address || '';
+      
+      // Split IP addresses into parts
+      const partsA = ipA.split('.').map(part => parseInt(part) || 0);
+      const partsB = ipB.split('.').map(part => parseInt(part) || 0);
+      
+      // Compare each octet
+      for (let i = 0; i < 4; i++) {
+        const numA = partsA[i] || 0;
+        const numB = partsB[i] || 0;
+        if (numA !== numB) {
+          return numA - numB;
+        }
+      }
+      return 0;
+    });
+    
     res.json({
       success: true,
-      staticIPs: result.rows
+      staticIPs: staticIPs
     });
     
   } catch (error) {
     console.error('Error fetching static IP assignments:', error);
     
-    // Fallback to simple string sorting if the array sorting fails
+    // Final fallback - get data without any sorting
     try {
-      console.log('Attempting fallback sorting...');
+      console.log('Attempting final fallback - no sorting...');
       const fallbackResult = await pool.query(`
         SELECT id, ip_address, mac_address, hostname, description, 
                created_at, updated_at 
-        FROM static_ips 
-        ORDER BY ip_address
+        FROM static_ips
       `);
       
-      console.log(`Found ${fallbackResult.rows.length} static IP assignments (fallback sorting)`);
+      console.log(`Found ${fallbackResult.rows.length} static IP assignments (no sorting)`);
       
       res.json({
         success: true,
-        staticIPs: fallbackResult.rows
+        staticIPs: fallbackResult.rows,
+        warning: 'IP addresses may not be sorted due to data issues'
       });
     } catch (fallbackError) {
-      console.error('Fallback sorting also failed:', fallbackError);
+      console.error('Final fallback also failed:', fallbackError);
       res.status(500).json({
         success: false,
         error: fallbackError.message
@@ -109,7 +136,7 @@ router.get('/static-ips', async (req, res) => {
   }
 });
 
-// POST /api/static-ips - Add new static IP with proper validation
+// POST /api/static-ips - Add new static IP with enhanced error messages
 router.post('/static-ips', async (req, res) => {
   try {
     const { ip_address, mac_address, hostname, description } = req.body;
@@ -133,7 +160,12 @@ router.post('/static-ips', async (req, res) => {
     if (existingStaticIP.rows.length > 0) {
       return res.status(409).json({
         success: false,
-        error: `IP address ${ip_address} is already assigned as a static IP`
+        error: `This IP address is already assigned as a static IP!\n\nIP ${ip_address} is already assigned to:\n• Device: ${existingStaticIP.rows[0].hostname || 'Unknown'}\n• MAC: ${existingStaticIP.rows[0].mac_address || 'Unknown'}\n\nPlease choose a different IP address or edit the existing assignment.`,
+        conflictDetails: {
+          type: 'static_ip_exists',
+          existing_static_ip: existingStaticIP.rows[0],
+          conflicting_ip: ip_address
+        }
       });
     }
     
@@ -146,7 +178,12 @@ router.post('/static-ips', async (req, res) => {
     if (existingMAC.rows.length > 0) {
       return res.status(409).json({
         success: false,
-        error: `MAC address ${mac_address} is already assigned to another static IP`
+        error: `This MAC address is already assigned to another static IP!\n\nMAC ${mac_address} is currently assigned to:\n• IP Address: ${existingMAC.rows[0].ip_address}\n• Device: ${existingMAC.rows[0].hostname || 'Unknown'}\n\nEach device (MAC address) can only have one static IP assignment.`,
+        conflictDetails: {
+          type: 'mac_address_exists',
+          existing_static_ip: existingMAC.rows[0],
+          conflicting_mac: mac_address
+        }
       });
     }
     
@@ -156,11 +193,13 @@ router.post('/static-ips', async (req, res) => {
     if (dhcpCheck.conflict) {
       return res.status(409).json({
         success: false,
-        error: `IP address ${ip_address} is already reserved in DHCP for MAC ${dhcpCheck.reservation['hw-address']}. Please choose a different IP address.`,
+        error: `This IP address is already reserved in DHCP!\n\nIP ${ip_address} is currently assigned to:\n• MAC Address: ${dhcpCheck.reservation['hw-address']}\n• Device: ${dhcpCheck.reservation.hostname || 'Unknown device'}\n\nTo use this IP for a static assignment:\n1. Remove the DHCP reservation first, OR\n2. Choose a different IP address outside the reservation pool`,
         conflictDetails: {
           type: 'dhcp_reservation',
           existing_mac: dhcpCheck.reservation['hw-address'],
-          hostname: dhcpCheck.reservation.hostname || 'Unknown'
+          hostname: dhcpCheck.reservation.hostname || 'Unknown',
+          conflicting_ip: ip_address,
+          reservation_details: dhcpCheck.reservation
         }
       });
     }
@@ -190,7 +229,7 @@ router.post('/static-ips', async (req, res) => {
   }
 });
 
-// PUT /api/static-ips/:id - Update static IP with validation
+// PUT /api/static-ips/:id - Update static IP with enhanced error messages
 router.put('/static-ips/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -221,7 +260,12 @@ router.put('/static-ips/:id', async (req, res) => {
       if (existingStaticIP.rows.length > 0) {
         return res.status(409).json({
           success: false,
-          error: `IP address ${ip_address} is already assigned as a static IP`
+          error: `Cannot change to this IP address!\n\nIP ${ip_address} is already assigned to:\n• Device: ${existingStaticIP.rows[0].hostname || 'Unknown'}\n• MAC: ${existingStaticIP.rows[0].mac_address || 'Unknown'}\n\nPlease choose a different IP address.`,
+          conflictDetails: {
+            type: 'static_ip_exists',
+            existing_static_ip: existingStaticIP.rows[0],
+            conflicting_ip: ip_address
+          }
         });
       }
       
@@ -231,11 +275,13 @@ router.put('/static-ips/:id', async (req, res) => {
       if (dhcpCheck.conflict) {
         return res.status(409).json({
           success: false,
-          error: `IP address ${ip_address} is already reserved in DHCP for MAC ${dhcpCheck.reservation['hw-address']}. Please choose a different IP address.`,
+          error: `Cannot change to this IP address!\n\nIP ${ip_address} is already reserved in DHCP for:\n• MAC Address: ${dhcpCheck.reservation['hw-address']}\n• Device: ${dhcpCheck.reservation.hostname || 'Unknown device'}\n\nPlease choose a different IP address.`,
           conflictDetails: {
             type: 'dhcp_reservation',
             existing_mac: dhcpCheck.reservation['hw-address'],
-            hostname: dhcpCheck.reservation.hostname || 'Unknown'
+            hostname: dhcpCheck.reservation.hostname || 'Unknown',
+            conflicting_ip: ip_address,
+            reservation_details: dhcpCheck.reservation
           }
         });
       }
@@ -251,7 +297,12 @@ router.put('/static-ips/:id', async (req, res) => {
       if (existingMAC.rows.length > 0) {
         return res.status(409).json({
           success: false,
-          error: `MAC address ${mac_address} is already assigned to another static IP`
+          error: `Cannot change to this MAC address!\n\nMAC ${mac_address} is already assigned to:\n• IP Address: ${existingMAC.rows[0].ip_address}\n• Device: ${existingMAC.rows[0].hostname || 'Unknown'}\n\nPlease choose a different MAC address.`,
+          conflictDetails: {
+            type: 'mac_address_exists',
+            existing_static_ip: existingMAC.rows[0],
+            conflicting_mac: mac_address
+          }
         });
       }
     }

@@ -149,63 +149,114 @@ export const api = {
     }
   },
 
-  /**
-   * Add a new static IP assignment to PostgreSQL database (CORRECTED)
-   */
-  async addStaticIPAssignment(staticIPData) {
-    try {
-      console.log('Adding static IP assignment to database:', staticIPData);
-      
-      // No need to check reservations here - backend handles this
-      // Send directly to backend for validation and creation
-      const response = await fetchWithAuth(`${API_BASE}/static-ips`, {
-        method: 'POST',
-        body: JSON.stringify(staticIPData)
-      });
-      
-      const data = await response.json();
-      
-      if (data.success) {
-        console.log('Static IP added successfully:', data.staticIP);
-        return data.staticIP;
-      } else {
-        // Backend will provide specific error messages about conflicts
-        throw new Error(data.error || 'Failed to add static IP');
-      }
-    } catch (error) {
-      console.error('Error adding static IP assignment:', error);
-      throw error;
-    }
-  },
+// Enhanced error handling functions for better user experience
+/**
+ * Add a new static IP assignment with enhanced error handling
+ */
+async addStaticIPAssignment(staticIPData) {
+  try {
+    console.log('Adding static IP assignment to database:', staticIPData);
+    
+    const response = await fetchWithAuth(`${API_BASE}/static-ips`, {
+      method: 'POST',
+      body: JSON.stringify(staticIPData)
+    });
+    
+    const data = await response.json();
+    
+    if (data.success) {
+      console.log('Static IP added successfully:', data.staticIP);
+      return data.staticIP;
+    } else {
+      // Enhanced error handling for different conflict types
+      if (response.status === 409 && data.conflictDetails) {
+        const { conflictDetails } = data;
+        
+        switch (conflictDetails.type) {
+          case 'dhcp_reservation':
+            throw new Error(`This IP address is already reserved in DHCP!\n\n` +
+              `IP ${staticIPData.ip_address} is currently assigned to:\n` +
+              `• MAC Address: ${conflictDetails.existing_mac}\n` +
+              `• Device: ${conflictDetails.hostname || 'Unknown device'}\n\n` +
+              `To use this IP for a static assignment, you need to:\n` +
+              `1. Remove the DHCP reservation first, OR\n` +
+              `2. Choose a different IP address outside the reservation pool`);
+              
+          case 'static_ip_exists':
+            throw new Error(`This IP address is already assigned as a static IP!\n\n` +
+              `Please choose a different IP address or edit the existing assignment.`);
+              
+          case 'mac_address_exists':
+            throw new Error(`This MAC address is already assigned to another static IP!\n\n` +
+              `Each device (MAC address) can only have one static IP assignment.`);
+              
+          default:
+            throw new Error(data.error || 'IP address conflict detected');
+        }
+      }
+      
+      // Handle other error types
+      throw new Error(data.error || 'Failed to add static IP');
+    }
+  } catch (error) {
+    console.error('Error adding static IP assignment:', error);
+    throw error;
+  }
+},
 
-  /**
-   * Update an existing static IP assignment in PostgreSQL database (CORRECTED)
-   */
-  async updateStaticIPAssignment(staticIPId, updateData) {
-    try {
-      console.log('Updating static IP assignment in database:', staticIPId, updateData);
-      
-      // No need to check reservations here - backend handles this
-      // Send directly to backend for validation and update
-      const response = await fetchWithAuth(`${API_BASE}/static-ips/${staticIPId}`, {
-        method: 'PUT',
-        body: JSON.stringify(updateData)
-      });
-      
-      const data = await response.json();
-      
-      if (data.success) {
-        console.log('Static IP updated successfully:', data.staticIP);
-        return data.staticIP;
-      } else {
-        // Backend will provide specific error messages about conflicts
-        throw new Error(data.error || 'Failed to update static IP');
-      }
-    } catch (error) {
-      console.error('Error updating static IP assignment:', error);
-      throw error;
-    }
-  },
+// Also enhance the updateStaticIPAssignment function:
+/**
+ * Update an existing static IP assignment with enhanced error handling
+ */
+async updateStaticIPAssignment(staticIPId, updateData) {
+  try {
+    console.log('Updating static IP assignment in database:', staticIPId, updateData);
+    
+    const response = await fetchWithAuth(`${API_BASE}/static-ips/${staticIPId}`, {
+      method: 'PUT',
+      body: JSON.stringify(updateData)
+    });
+    
+    const data = await response.json();
+    
+    if (data.success) {
+      console.log('Static IP updated successfully:', data.staticIP);
+      return data.staticIP;
+    } else {
+      // Enhanced error handling for conflicts during updates
+      if (response.status === 409 && data.conflictDetails) {
+        const { conflictDetails } = data;
+        
+        switch (conflictDetails.type) {
+          case 'dhcp_reservation':
+            throw new Error(`Cannot change to this IP address!\n\n` +
+              `IP ${updateData.ip_address} is already reserved in DHCP for:\n` +
+              `• MAC Address: ${conflictDetails.existing_mac}\n` +
+              `• Device: ${conflictDetails.hostname || 'Unknown device'}\n\n` +
+              `Please choose a different IP address.`);
+              
+          case 'static_ip_exists':
+            throw new Error(`Cannot change to this IP address!\n\n` +
+              `IP ${updateData.ip_address} is already assigned to another static device.\n` +
+              `Please choose a different IP address.`);
+              
+          case 'mac_address_exists':
+            throw new Error(`Cannot change to this MAC address!\n\n` +
+              `MAC ${updateData.mac_address} is already assigned to another static IP.\n` +
+              `Each device (MAC address) can only have one static IP assignment.`);
+              
+          default:
+            throw new Error(data.error || 'IP address conflict detected');
+        }
+      }
+      
+      throw new Error(data.error || 'Failed to update static IP');
+    }
+  } catch (error) {
+    console.error('Error updating static IP assignment:', error);
+    throw error;
+  }
+},
   
   /**
    * Delete a static IP assignment from PostgreSQL database

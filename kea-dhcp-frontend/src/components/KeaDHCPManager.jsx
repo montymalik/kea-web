@@ -1,4 +1,4 @@
-// Updated KeaDHCPManager.jsx - Main component with Static IP support and Pool Configuration
+// Updated KeaDHCPManager.jsx - Main component with Static IP support, Pool Configuration, and Enhanced Error Handling
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { api } from '../services/api';
@@ -21,6 +21,7 @@ import EditStaticIPModal from './EditStaticIPModal';
 import ModifyReservationModal from './ModifyReservationModal';
 import HAStatusModal from './HAStatusModal';
 import PoolConfigModal from './PoolConfigModal';
+import ErrorDialog from './ErrorDialog';
 import { DeleteConfirmationModal, ModifyConfirmationModal } from './ConfirmationModals';
 
 const KeaDHCPManager = () => {
@@ -49,6 +50,10 @@ const KeaDHCPManager = () => {
   const [showModifyConfirm, setShowModifyConfirm] = useState(false);
   const [showHAStatusModal, setShowHAStatusModal] = useState(false);
   const [showPoolConfigModal, setShowPoolConfigModal] = useState(false);
+  
+  // Enhanced Error Handling State
+  const [showErrorDialog, setShowErrorDialog] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
     
   // Form data states
   const [modifyData, setModifyData] = useState({});
@@ -204,7 +209,7 @@ const KeaDHCPManager = () => {
       }
     } catch (error) {
       console.error('Error fetching data or HA status:', error);
-      alert('Error connecting to the server. Make sure the backend is running.');
+      handleError(error, 'fetching data from server');
     }
     setLoading(false);
   };
@@ -212,6 +217,55 @@ const KeaDHCPManager = () => {
   useEffect(() => {
     fetchData();
   }, []);
+
+  // Enhanced error handling function
+  const handleError = (error, context = '') => {
+    console.error(`Error in ${context}:`, error);
+    
+    let userFriendlyMessage = error.message;
+    
+    // Parse API errors for better formatting
+    if (error.message.includes('API request failed:')) {
+      const match = error.message.match(/Details: ({.*})/);
+      if (match) {
+        try {
+          const details = JSON.parse(match[1]);
+          if (details.error) {
+            userFriendlyMessage = details.error;
+            
+            // Handle conflict details for even better messaging
+            if (details.conflictDetails) {
+              const { conflictDetails } = details;
+              switch (conflictDetails.type) {
+                case 'dhcp_reservation':
+                  userFriendlyMessage = `This IP address is already reserved in DHCP!\n\n` +
+                    `The IP is currently assigned to:\n` +
+                    `• MAC Address: ${conflictDetails.existing_mac}\n` +
+                    `• Device: ${conflictDetails.hostname || 'Unknown device'}\n\n` +
+                    `To use this IP for a static assignment:\n` +
+                    `1. Remove the DHCP reservation first, OR\n` +
+                    `2. Choose a different IP address`;
+                  break;
+                case 'static_ip_exists':
+                  userFriendlyMessage = `This IP address is already assigned as a static IP!\n\n` +
+                    `Please choose a different IP address or edit the existing assignment.`;
+                  break;
+                case 'mac_address_exists':
+                  userFriendlyMessage = `This MAC address is already assigned!\n\n` +
+                    `Each device (MAC address) can only have one static IP assignment.`;
+                  break;
+              }
+            }
+          }
+        } catch (parseError) {
+          console.warn('Could not parse error details:', parseError);
+        }
+      }
+    }
+    
+    setErrorMessage(userFriendlyMessage);
+    setShowErrorDialog(true);
+  };
 
   // HA STATUS HANDLERS
   const handleHAStatusClick = () => {
@@ -226,8 +280,7 @@ const KeaDHCPManager = () => {
       console.log('Refreshed HA status:', haStatusData);
       setHaStatus(haStatusData);
     } catch (error) {
-      console.error('Error refreshing HA status:', error);
-      alert('Error refreshing HA status');
+      handleError(error, 'refreshing HA status');
     }
   };
 
@@ -264,15 +317,14 @@ const KeaDHCPManager = () => {
         await fetchData();
         alert('Lease deleted successfully');
       } else {
-        alert('Failed to delete lease');
+        handleError(new Error('Failed to delete lease'), 'deleting lease');
       }
     } catch (error) {
-      console.error('Error deleting lease:', error);
-      alert('Error deleting lease');
+      handleError(error, 'deleting lease');
     }
   };
 
-  // Reservation operations
+  // Reservation operations with enhanced error handling
   const deleteReservation = async (reservation) => {
     try {
       const success = await api.deleteReservation(reservation);
@@ -281,11 +333,10 @@ const KeaDHCPManager = () => {
         closeAllModals();
         alert('Reservation deleted successfully');
       } else {
-        alert('Failed to delete reservation');
+        handleError(new Error('Failed to delete reservation'), 'deleting reservation');
       }
     } catch (error) {
-      console.error('Error deleting reservation:', error);
-      alert('Error deleting reservation');
+      handleError(error, 'deleting reservation');
     }
   };
 
@@ -302,8 +353,7 @@ const KeaDHCPManager = () => {
       });
       alert('Reservation added successfully');
     } catch (error) {
-      console.error('Error adding reservation:', error);
-      alert(`Failed to add reservation: ${error.message}`);
+      handleError(error, 'adding reservation');
     }
   };
 
@@ -320,12 +370,11 @@ const KeaDHCPManager = () => {
         alert('Reservation updated successfully');
       }
     } catch (error) {
-      console.error('Error updating reservation:', error);
-      alert(`Error updating reservation: ${error.message}`);
+      handleError(error, 'updating reservation');
     }
   };
 
-  // Static IP operations
+  // Static IP operations with enhanced error handling
   const addStaticIPAssignment = async () => {
     try {
       await api.addStaticIPAssignment(newStaticIP);
@@ -337,10 +386,9 @@ const KeaDHCPManager = () => {
         hostname: '',
         description: ''
       });
-      alert('Static IP assignment added successfully');
+      alert('Static IP assignment added successfully!');
     } catch (error) {
-      console.error('Error adding static IP:', error);
-      alert(`Failed to add static IP: ${error.message}`);
+      handleError(error, 'adding static IP assignment');
     }
   };
 
@@ -349,10 +397,9 @@ const KeaDHCPManager = () => {
       await api.updateStaticIPAssignment(selectedStaticIP.id, editStaticIP);
       await fetchData();
       closeAllModals();
-      alert('Static IP assignment updated successfully');
+      alert('Static IP assignment updated successfully!');
     } catch (error) {
-      console.error('Error updating static IP:', error);
-      alert(`Error updating static IP: ${error.message}`);
+      handleError(error, 'updating static IP assignment');
     }
   };
 
@@ -366,18 +413,17 @@ const KeaDHCPManager = () => {
         closeAllModals();
         alert('Static IP assignment deleted successfully');
       } else {
-        alert('Failed to delete static IP assignment');
+        handleError(new Error('Failed to delete static IP assignment'), 'deleting static IP assignment');
       }
     } catch (error) {
-      console.error('Error deleting static IP:', error);
-      alert('Error deleting static IP assignment');
+      handleError(error, 'deleting static IP assignment');
     }
   };
 
   // Enhanced next available IP function (considers static IPs)
   const getNextAvailableIP = async () => {
     if (!newReservation.subnet_id) {
-      alert('Please select a subnet first');
+      handleError(new Error('Please select a subnet first'), 'finding next available IP');
       return;
     }
     
@@ -385,8 +431,7 @@ const KeaDHCPManager = () => {
       const data = await api.getNextAvailableIP(newReservation.subnet_id);
       setNewReservation({...newReservation, ipv4_address: data.nextAvailableIP});
     } catch (error) {
-      console.error('Error fetching next available IP:', error);
-      alert(`No available IPs found: ${error.message}`);
+      handleError(error, 'finding next available IP');
     }
   };
 
@@ -396,8 +441,7 @@ const KeaDHCPManager = () => {
       const data = await api.getNextAvailableIP(1); // Assuming subnet 1
       setNewStaticIP({...newStaticIP, ip_address: data.nextAvailableIP});
     } catch (error) {
-      console.error('Error fetching next available IP for static assignment:', error);
-      alert(`No available IPs found: ${error.message}`);
+      handleError(error, 'finding next available IP for static assignment');
     }
   };
 
@@ -451,8 +495,10 @@ const KeaDHCPManager = () => {
     setShowModifyConfirm(false);
     setShowHAStatusModal(false);
     setShowPoolConfigModal(false);
+    setShowErrorDialog(false);
     setSelectedReservation(null);
     setSelectedStaticIP(null);
+    setErrorMessage('');
   };
 
   const handleModifySubmit = () => {
@@ -624,6 +670,16 @@ const KeaDHCPManager = () => {
           modifyData={modifyData}
           onConfirm={updateReservation}
           onCancel={() => setShowModifyConfirm(false)}
+        />
+
+        {/* Enhanced Error Dialog */}
+        <ErrorDialog
+          show={showErrorDialog}
+          error={errorMessage}
+          onClose={() => {
+            setShowErrorDialog(false);
+            setErrorMessage('');
+          }}
         />
       </div>
     </div>
