@@ -1,4 +1,4 @@
-// Updated KeaDHCPManager.jsx - Main component with Static IP support
+// Updated KeaDHCPManager.jsx - Main component with Static IP support and Pool Configuration
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { api } from '../services/api';
@@ -20,6 +20,7 @@ import StaticIPDetailsModal from './StaticIPDetailsModal';
 import EditStaticIPModal from './EditStaticIPModal';
 import ModifyReservationModal from './ModifyReservationModal';
 import HAStatusModal from './HAStatusModal';
+import PoolConfigModal from './PoolConfigModal';
 import { DeleteConfirmationModal, ModifyConfirmationModal } from './ConfirmationModals';
 
 const KeaDHCPManager = () => {
@@ -30,6 +31,7 @@ const KeaDHCPManager = () => {
   const [staticIPs, setStaticIPs] = useState([]);
   const [subnets, setSubnets] = useState([]);
   const [reservedPool, setReservedPool] = useState(null);
+  const [poolConfig, setPoolConfig] = useState(null);
   const [haStatus, setHaStatus] = useState(null);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -46,6 +48,7 @@ const KeaDHCPManager = () => {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showModifyConfirm, setShowModifyConfirm] = useState(false);
   const [showHAStatusModal, setShowHAStatusModal] = useState(false);
+  const [showPoolConfigModal, setShowPoolConfigModal] = useState(false);
     
   // Form data states
   const [modifyData, setModifyData] = useState({});
@@ -117,7 +120,7 @@ const KeaDHCPManager = () => {
     [staticIPs, searchTerm]
   );
 
-  // Data fetching - Updated to include static IPs
+  // Data fetching - Updated to include static IPs and pool configuration
   const fetchData = async () => {
     setLoading(true);
     try {
@@ -127,7 +130,7 @@ const KeaDHCPManager = () => {
         api.getHAStatus()
       ]);
 
-      console.log('Raw API data (leases, reservations, subnets, reservedPool, staticIPs):', allData);
+      console.log('Raw API data (leases, reservations, subnets, poolConfig, staticIPs):', allData);
       console.log('HA Status data received:', haStatusData);
 
       if (allData.leases) {
@@ -162,12 +165,28 @@ const KeaDHCPManager = () => {
         setSubnets([]);
       }
 
-      if (allData.reservedPool) {
-        console.log('Setting reserved pool config:', allData.reservedPool);
+      // Handle pool configuration from database
+      if (allData.poolConfig) {
+        console.log('Setting pool config from database:', allData.poolConfig);
+        setPoolConfig(allData.poolConfig);
+        
+        // Set reservedPool for backward compatibility
         setReservedPool(allData.reservedPool);
       } else {
-        console.log('No reserved pool config received');
-        setReservedPool(null);
+        console.log('No pool config received, using defaults');
+        const defaultPool = {
+          range: '192.168.1.2 - 192.168.1.100',
+          startIP: '192.168.1.2',
+          endIP: '192.168.1.100',
+          total: 99
+        };
+        setReservedPool(defaultPool);
+        setPoolConfig({
+          start_ip: '192.168.1.2',
+          end_ip: '192.168.1.100',
+          total: 99,
+          description: 'Default configuration'
+        });
       }
 
       // Set HA status
@@ -209,6 +228,29 @@ const KeaDHCPManager = () => {
     } catch (error) {
       console.error('Error refreshing HA status:', error);
       alert('Error refreshing HA status');
+    }
+  };
+
+  // POOL CONFIGURATION HANDLERS
+  const handlePoolConfigClick = () => {
+    console.log('Pool config clicked, current config:', poolConfig);
+    setShowPoolConfigModal(true);
+  };
+
+  const handlePoolConfigSave = async (newPoolData) => {
+    try {
+      console.log('Saving pool configuration:', newPoolData);
+      
+      const updatedPoolConfig = await api.updatePoolConfiguration(newPoolData);
+      console.log('Pool configuration saved successfully:', updatedPoolConfig);
+      
+      // Refresh all data to reflect changes
+      await fetchData();
+      
+      alert('Pool configuration updated successfully! IP statistics have been recalculated.');
+    } catch (error) {
+      console.error('Error saving pool configuration:', error);
+      throw error; // Re-throw to be handled by the modal
     }
   };
 
@@ -408,6 +450,7 @@ const KeaDHCPManager = () => {
     setShowDeleteConfirm(false);
     setShowModifyConfirm(false);
     setShowHAStatusModal(false);
+    setShowPoolConfigModal(false);
     setSelectedReservation(null);
     setSelectedStaticIP(null);
   };
@@ -443,7 +486,9 @@ const KeaDHCPManager = () => {
             enrichedReservations={enrichedReservations}
             staticIPs={staticIPs}
             haStatus={haStatus}
+            poolConfig={poolConfig}
             onHAStatusClick={handleHAStatusClick}
+            onPoolConfigClick={handlePoolConfigClick}
           />
         )}
         {activeTab === 'static-ips' && (
@@ -452,7 +497,9 @@ const KeaDHCPManager = () => {
             enrichedReservations={enrichedReservations}
             staticIPs={staticIPs}
             haStatus={haStatus}
+            poolConfig={poolConfig}
             onHAStatusClick={handleHAStatusClick}
+            onPoolConfigClick={handlePoolConfigClick}
           />
         )}
 
@@ -555,6 +602,13 @@ const KeaDHCPManager = () => {
           haStatus={haStatus}
           onClose={() => setShowHAStatusModal(false)}
           onRefresh={refreshHAStatus}
+        />
+
+        <PoolConfigModal
+          show={showPoolConfigModal}
+          poolConfig={poolConfig}
+          onClose={() => setShowPoolConfigModal(false)}
+          onSave={handlePoolConfigSave}
         />
 
         <DeleteConfirmationModal

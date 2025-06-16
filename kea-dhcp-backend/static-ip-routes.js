@@ -1,365 +1,424 @@
-// static-ip-routes.js - Express routes for static IP management with PostgreSQL
+// static-ip-routes.js - Updated with corrected validation logic
 const express = require('express');
 const { Pool } = require('pg');
+const fetch = require('node-fetch');
+const config = require('./config');
 const router = express.Router();
 
-// PostgreSQL connection configuration
+// Database connection
 const pool = new Pool({
   user: process.env.DB_USER || 'postgres',
   host: process.env.DB_HOST || 'localhost',
   database: process.env.DB_NAME || 'kea_dhcp',
   password: process.env.DB_PASSWORD || 'postgres',
   port: process.env.DB_PORT || 5432,
-  // Connection pool settings
-  max: 10,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
 });
 
-// Initialize PostgreSQL database
-const initDatabase = async () => {
+// Get Kea server URL from config
+const KEA_SERVER = config.keaServer;
+
+// Helper function to check DHCP reservations
+async function checkDHCPReservations(ipAddress) {
   try {
-    console.log('Connecting to PostgreSQL database...');
+    console.log(`Checking DHCP reservations for IP: ${ipAddress}`);
     
-    // Test connection
-    const client = await pool.connect();
-    console.log('Connected to PostgreSQL successfully');
+    const response = await fetch(`${KEA_SERVER}/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        "command": "reservation-get-all",
+        "service": ["dhcp4"],
+        "arguments": {
+          "subnet-id": 1 // You might need to make this dynamic
+        }
+      })
+    });
     
-    // Create the static_ips table if it doesn't exist
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS static_ips (
-        id SERIAL PRIMARY KEY,
-        ip_address INET NOT NULL UNIQUE,
-        mac_address MACADDR,
-        hostname VARCHAR(255),
-        description TEXT,
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
+    if (response.ok) {
+      const data = await response.json();
+      
+      if (data[0] && data[0].result === 0) {
+        const reservations = data[0].arguments.hosts || [];
+        
+        // Check if the IP is already reserved in DHCP
+        const conflictingReservation = reservations.find(r => r['ip-address'] === ipAddress);
+        
+        if (conflictingReservation) {
+          return {
+            conflict: true,
+            reservation: conflictingReservation
+          };
+        }
+      }
+    }
     
-    // Create index on ip_address for faster lookups
-    await client.query(`
-      CREATE INDEX IF NOT EXISTS idx_static_ips_ip_address ON static_ips(ip_address)
-    `);
-    
-    // Create index on mac_address for faster lookups
-    await client.query(`
-      CREATE INDEX IF NOT EXISTS idx_static_ips_mac_address ON static_ips(mac_address)
-    `);
-    
-    console.log('Static IPs table and indexes ready');
-    client.release();
-    
-    return true;
+    return { conflict: false, reservation: null };
   } catch (error) {
-    console.error('Error initializing database:', error.message);
-    throw error;
+    console.warn('Could not check DHCP reservations:', error.message);
+    return { conflict: false, reservation: null, error: error.message };
   }
-};
-
-// Database query helper with error handling
-const queryDatabase = async (text, params = []) => {
-  const client = await pool.connect();
-  try {
-    const result = await client.query(text, params);
-    return result;
-  } catch (error) {
-    console.error('Database query error:', error.message);
-    throw error;
-  } finally {
-    client.release();
-  }
-};
-
-// Validation functions
-const validateIPAddress = (ip) => {
-  const ipRegex = /^(\d{1,3}\.){3}\d{1,3}$/;
-  if (!ipRegex.test(ip)) return false;
-  
-  const octets = ip.split('.');
-  return octets.every(octet => {
-    const num = parseInt(octet);
-    return num >= 0 && num <= 255;
-  });
-};
-
-const validateMacAddress = (mac) => {
-  if (!mac) return true; // MAC is optional
-  const macRegex = /^([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}$/;
-  return macRegex.test(mac);
-};
-
-const validateHostname = (hostname) => {
-  if (!hostname) return true; // Hostname is optional
-  const hostnameRegex = /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/;
-  return hostnameRegex.test(hostname);
-};
-
-// Routes
+}
 
 // GET /api/static-ips - Get all static IP assignments
 router.get('/static-ips', async (req, res) => {
-  console.log('GET /api/static-ips - Fetching all static IPs');
-  
   try {
-    const result = await queryDatabase(
-      'SELECT id, HOST(ip_address) as ip_address, mac_address::text, hostname, description, created_at, updated_at FROM static_ips ORDER BY ip_address'
-    );
+    console.log('Fetching all static IP assignments...');
+    
+    const result = await pool.query(`
+      SELECT id, ip_address, mac_address, hostname, description, 
+             created_at, updated_at 
+      FROM static_ips 
+      ORDER BY 
+        CASE 
+          WHEN ip_address ~ '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' THEN
+            CAST(split_part(ip_address, '.', 1) AS INTEGER) * 16777216 +
+            CAST(split_part(ip_address, '.', 2) AS INTEGER) * 65536 +
+            CAST(split_part(ip_address, '.', 3) AS INTEGER) * 256 +
+            CAST(split_part(ip_address, '.', 4) AS INTEGER)
+          ELSE 0 
+        END
+    `);
     
     console.log(`Found ${result.rows.length} static IP assignments`);
-    res.json({ success: true, staticIPs: result.rows });
-  } catch (error) {
-    console.error('Error fetching static IPs:', error.message);
-    res.status(500).json({ error: 'Failed to fetch static IPs', details: error.message });
-  }
-});
-
-// POST /api/static-ips - Add new static IP assignment
-router.post('/static-ips', async (req, res) => {
-  const { ip_address, mac_address, hostname, description } = req.body;
-  
-  console.log('POST /api/static-ips - Adding static IP:', req.body);
-  
-  // Validation
-  const errors = [];
-  
-  if (!ip_address) {
-    errors.push('IP address is required');
-  } else if (!validateIPAddress(ip_address)) {
-    errors.push('Invalid IP address format');
-  }
-  
-  if (mac_address && !validateMacAddress(mac_address)) {
-    errors.push('Invalid MAC address format');
-  }
-  
-  if (hostname && !validateHostname(hostname)) {
-    errors.push('Invalid hostname format');
-  }
-  
-  if (errors.length > 0) {
-    return res.status(400).json({ error: 'Validation failed', details: errors });
-  }
-  
-  try {
-    // Insert into database
-    const result = await queryDatabase(`
-      INSERT INTO static_ips (ip_address, mac_address, hostname, description)
-      VALUES ($1, $2, $3, $4)
-      RETURNING id, HOST(ip_address) as ip_address, mac_address::text, hostname, description, created_at, updated_at
-    `, [ip_address, mac_address || null, hostname || null, description || null]);
     
-    const newStaticIP = result.rows[0];
-    console.log('Static IP added successfully with ID:', newStaticIP.id);
-    
-    res.status(201).json({ 
-      success: true, 
-      staticIP: newStaticIP, 
-      message: 'Static IP added successfully' 
+    res.json({
+      success: true,
+      staticIPs: result.rows
     });
+    
   } catch (error) {
-    if (error.code === '23505') { // PostgreSQL unique constraint violation
-      console.error('Duplicate IP address:', ip_address);
-      res.status(409).json({ 
-        error: 'IP address already exists', 
-        details: `${ip_address} is already assigned` 
-      });
-    } else {
-      console.error('Error adding static IP:', error.message);
-      res.status(500).json({ error: 'Failed to add static IP', details: error.message });
-    }
+    console.error('Error fetching static IP assignments:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
   }
 });
 
-// PUT /api/static-ips/:id - Update static IP assignment
+// POST /api/static-ips - Add new static IP with proper validation (UPDATED)
+router.post('/static-ips', async (req, res) => {
+  try {
+    const { ip_address, mac_address, hostname, description } = req.body;
+    
+    console.log('Adding static IP assignment:', { ip_address, mac_address, hostname });
+    
+    // Validate required fields
+    if (!ip_address || !mac_address) {
+      return res.status(400).json({
+        success: false,
+        error: 'ip_address and mac_address are required'
+      });
+    }
+    
+    // Check if IP already exists as a static IP
+    const existingStaticIP = await pool.query(
+      'SELECT * FROM static_ips WHERE ip_address = $1',
+      [ip_address]
+    );
+    
+    if (existingStaticIP.rows.length > 0) {
+      return res.status(409).json({
+        success: false,
+        error: `IP address ${ip_address} is already assigned as a static IP`
+      });
+    }
+    
+    // Check if MAC already exists
+    const existingMAC = await pool.query(
+      'SELECT * FROM static_ips WHERE mac_address = $1',
+      [mac_address]
+    );
+    
+    if (existingMAC.rows.length > 0) {
+      return res.status(409).json({
+        success: false,
+        error: `MAC address ${mac_address} is already assigned to another static IP`
+      });
+    }
+    
+    // ✅ KEY PART: Check if IP conflicts with DHCP reservations
+    const dhcpCheck = await checkDHCPReservations(ip_address);
+    
+    if (dhcpCheck.conflict) {
+      return res.status(409).json({
+        success: false,
+        error: `IP address ${ip_address} is already reserved in DHCP for MAC ${dhcpCheck.reservation['hw-address']}. Please choose a different IP address.`,
+        conflictDetails: {
+          type: 'dhcp_reservation',
+          existing_mac: dhcpCheck.reservation['hw-address'],
+          hostname: dhcpCheck.reservation.hostname || 'Unknown'
+        }
+      });
+    }
+    
+    // Insert the new static IP assignment
+    const result = await pool.query(
+      `INSERT INTO static_ips (ip_address, mac_address, hostname, description, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, NOW(), NOW())
+       RETURNING *`,
+      [ip_address, mac_address, hostname || '', description || '']
+    );
+    
+    console.log('Static IP assignment created successfully:', result.rows[0]);
+    
+    res.json({
+      success: true,
+      staticIP: result.rows[0],
+      message: 'Static IP assignment created successfully'
+    });
+    
+  } catch (error) {
+    console.error('Error adding static IP assignment:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// PUT /api/static-ips/:id - Update static IP with validation (UPDATED)
 router.put('/static-ips/:id', async (req, res) => {
-  const { id } = req.params;
-  const { ip_address, mac_address, hostname, description } = req.body;
-  
-  console.log(`PUT /api/static-ips/${id} - Updating static IP:`, req.body);
-  
-  // Validation
-  const errors = [];
-  
-  if (!ip_address) {
-    errors.push('IP address is required');
-  } else if (!validateIPAddress(ip_address)) {
-    errors.push('Invalid IP address format');
-  }
-  
-  if (mac_address && !validateMacAddress(mac_address)) {
-    errors.push('Invalid MAC address format');
-  }
-  
-  if (hostname && !validateHostname(hostname)) {
-    errors.push('Invalid hostname format');
-  }
-  
-  if (errors.length > 0) {
-    return res.status(400).json({ error: 'Validation failed', details: errors });
-  }
-  
   try {
-    // Update database
-    const result = await queryDatabase(`
-      UPDATE static_ips 
-      SET ip_address = $1, mac_address = $2, hostname = $3, description = $4, updated_at = CURRENT_TIMESTAMP
-      WHERE id = $5
-      RETURNING id, HOST(ip_address) as ip_address, mac_address::text, hostname, description, created_at, updated_at
-    `, [ip_address, mac_address || null, hostname || null, description || null, id]);
+    const { id } = req.params;
+    const { ip_address, mac_address, hostname, description } = req.body;
     
-    if (result.rows.length === 0) {
-      console.error('Static IP not found:', id);
-      res.status(404).json({ error: 'Static IP not found', details: `No static IP with ID ${id}` });
-    } else {
-      const updatedStaticIP = result.rows[0];
-      console.log('Static IP updated successfully:', id);
-      res.json({ 
-        success: true, 
-        staticIP: updatedStaticIP, 
-        message: 'Static IP updated successfully' 
+    console.log(`Updating static IP assignment ID ${id}:`, { ip_address, mac_address, hostname });
+    
+    // Get current static IP to compare
+    const currentResult = await pool.query('SELECT * FROM static_ips WHERE id = $1', [id]);
+    
+    if (currentResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Static IP assignment not found'
       });
     }
-  } catch (error) {
-    if (error.code === '23505') { // PostgreSQL unique constraint violation
-      console.error('Duplicate IP address:', ip_address);
-      res.status(409).json({ 
-        error: 'IP address already exists', 
-        details: `${ip_address} is already assigned to another record` 
-      });
-    } else {
-      console.error('Error updating static IP:', error.message);
-      res.status(500).json({ error: 'Failed to update static IP', details: error.message });
-    }
-  }
-});
-
-// DELETE /api/static-ips/:id - Delete static IP assignment
-router.delete('/static-ips/:id', async (req, res) => {
-  const { id } = req.params;
-  
-  console.log(`DELETE /api/static-ips/${id} - Deleting static IP`);
-  
-  try {
-    // Delete and return the deleted record
-    const result = await queryDatabase(`
-      DELETE FROM static_ips 
-      WHERE id = $1 
-      RETURNING HOST(ip_address) as ip_address
-    `, [id]);
     
-    if (result.rows.length === 0) {
-      console.error('Static IP not found:', id);
-      res.status(404).json({ error: 'Static IP not found', details: `No static IP with ID ${id}` });
-    } else {
-      const deletedIP = result.rows[0].ip_address;
-      console.log('Static IP deleted successfully:', deletedIP);
-      res.json({ success: true, message: `Static IP ${deletedIP} deleted successfully` });
+    const currentStaticIP = currentResult.rows[0];
+    
+    // If IP address is changing, check for conflicts
+    if (ip_address && ip_address !== currentStaticIP.ip_address) {
+      // Check if new IP already exists as a static IP
+      const existingStaticIP = await pool.query(
+        'SELECT * FROM static_ips WHERE ip_address = $1 AND id != $2',
+        [ip_address, id]
+      );
+      
+      if (existingStaticIP.rows.length > 0) {
+        return res.status(409).json({
+          success: false,
+          error: `IP address ${ip_address} is already assigned as a static IP`
+        });
+      }
+      
+      // ✅ Check against DHCP reservations (same logic as POST)
+      const dhcpCheck = await checkDHCPReservations(ip_address);
+      
+      if (dhcpCheck.conflict) {
+        return res.status(409).json({
+          success: false,
+          error: `IP address ${ip_address} is already reserved in DHCP for MAC ${dhcpCheck.reservation['hw-address']}. Please choose a different IP address.`,
+          conflictDetails: {
+            type: 'dhcp_reservation',
+            existing_mac: dhcpCheck.reservation['hw-address'],
+            hostname: dhcpCheck.reservation.hostname || 'Unknown'
+          }
+        });
+      }
     }
+    
+    // If MAC address is changing, check for conflicts
+    if (mac_address && mac_address !== currentStaticIP.mac_address) {
+      const existingMAC = await pool.query(
+        'SELECT * FROM static_ips WHERE mac_address = $1 AND id != $2',
+        [mac_address, id]
+      );
+      
+      if (existingMAC.rows.length > 0) {
+        return res.status(409).json({
+          success: false,
+          error: `MAC address ${mac_address} is already assigned to another static IP`
+        });
+      }
+    }
+    
+    // Update the static IP assignment
+    const result = await pool.query(
+      `UPDATE static_ips 
+       SET ip_address = COALESCE($1, ip_address),
+           mac_address = COALESCE($2, mac_address),
+           hostname = COALESCE($3, hostname),
+           description = COALESCE($4, description),
+           updated_at = NOW()
+       WHERE id = $5
+       RETURNING *`,
+      [ip_address, mac_address, hostname, description, id]
+    );
+    
+    res.json({
+      success: true,
+      staticIP: result.rows[0],
+      message: 'Static IP assignment updated successfully'
+    });
+    
   } catch (error) {
-    console.error('Error deleting static IP:', error.message);
-    res.status(500).json({ error: 'Failed to delete static IP', details: error.message });
+    console.error('Error updating static IP assignment:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
   }
 });
 
 // GET /api/static-ips/:id - Get specific static IP assignment
 router.get('/static-ips/:id', async (req, res) => {
-  const { id } = req.params;
-  
-  console.log(`GET /api/static-ips/${id} - Fetching static IP`);
-  
   try {
-    const result = await queryDatabase(
-      'SELECT id, HOST(ip_address) as ip_address, mac_address::text, hostname, description, created_at, updated_at FROM static_ips WHERE id = $1',
+    const { id } = req.params;
+    
+    const result = await pool.query(
+      'SELECT * FROM static_ips WHERE id = $1',
       [id]
     );
     
     if (result.rows.length === 0) {
-      console.error('Static IP not found:', id);
-      res.status(404).json({ error: 'Static IP not found', details: `No static IP with ID ${id}` });
-    } else {
-      const staticIP = result.rows[0];
-      console.log('Static IP found:', staticIP.ip_address);
-      res.json({ success: true, staticIP: staticIP });
+      return res.status(404).json({
+        success: false,
+        error: 'Static IP assignment not found'
+      });
     }
+    
+    res.json({
+      success: true,
+      staticIP: result.rows[0]
+    });
+    
   } catch (error) {
-    console.error('Error fetching static IP:', error.message);
-    res.status(500).json({ error: 'Failed to fetch static IP', details: error.message });
+    console.error('Error fetching static IP assignment:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
   }
 });
 
-// GET /api/static-ips/check/:ip - Check if IP is already assigned
-router.get('/static-ips/check/:ip', async (req, res) => {
-  const { ip } = req.params;
-  
-  console.log(`GET /api/static-ips/check/${ip} - Checking IP availability`);
-  
+// DELETE /api/static-ips/:id - Delete static IP assignment
+router.delete('/static-ips/:id', async (req, res) => {
   try {
-    const result = await queryDatabase(
-      'SELECT id, HOST(ip_address) as ip_address FROM static_ips WHERE ip_address = $1',
+    const { id } = req.params;
+    
+    console.log(`Deleting static IP assignment ID: ${id}`);
+    
+    const result = await pool.query(
+      'DELETE FROM static_ips WHERE id = $1 RETURNING *',
+      [id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Static IP assignment not found'
+      });
+    }
+    
+    console.log('Static IP assignment deleted:', result.rows[0]);
+    
+    res.json({
+      success: true,
+      message: 'Static IP assignment deleted successfully',
+      deletedStaticIP: result.rows[0]
+    });
+    
+  } catch (error) {
+    console.error('Error deleting static IP assignment:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// GET /api/static-ips/check/:ip - Check if IP is assigned
+router.get('/static-ips/check/:ip', async (req, res) => {
+  try {
+    const { ip } = req.params;
+    
+    console.log(`Checking if IP ${ip} is assigned as static IP`);
+    
+    const result = await pool.query(
+      'SELECT * FROM static_ips WHERE ip_address = $1',
       [ip]
     );
     
-    const exists = result.rows.length > 0;
-    const staticIP = exists ? result.rows[0] : null;
-    
-    res.json({ 
-      success: true, 
-      exists: exists,
-      staticIP: staticIP
+    res.json({
+      success: true,
+      exists: result.rows.length > 0,
+      staticIP: result.rows.length > 0 ? result.rows[0] : null
     });
+    
   } catch (error) {
-    console.error('Error checking IP:', error.message);
-    res.status(500).json({ error: 'Failed to check IP', details: error.message });
+    console.error('Error checking static IP:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
   }
 });
 
-// GET /api/static-ips/stats - Get statistics about static IP assignments
-router.get('/static-ips/stats', async (req, res) => {
-  console.log('GET /api/static-ips/stats - Fetching static IP statistics');
-  
+// DELETE /api/static-ips/reset - Reset/clear all static IP assignments
+router.delete('/static-ips/reset', async (req, res) => {
   try {
-    const result = await queryDatabase(`
+    console.log('Resetting static IP database...');
+    
+    // Get count before deletion
+    const countResult = await pool.query('SELECT COUNT(*) FROM static_ips');
+    const deletedCount = parseInt(countResult.rows[0].count);
+    
+    // Delete all records
+    await pool.query('DELETE FROM static_ips');
+    
+    // Reset sequence if you have auto-increment ID
+    await pool.query('ALTER SEQUENCE static_ips_id_seq RESTART WITH 1');
+    
+    console.log(`Deleted ${deletedCount} static IP assignment(s)`);
+    
+    res.json({
+      success: true,
+      message: 'Static IP database reset successfully',
+      deletedCount: deletedCount
+    });
+    
+  } catch (error) {
+    console.error('Error resetting static IP database:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// GET /api/static-ips/stats - Get static IP statistics
+router.get('/static-ips/stats', async (req, res) => {
+  try {
+    const result = await pool.query(`
       SELECT 
-        COUNT(*) as total_count,
-        COUNT(mac_address) as with_mac_count,
-        COUNT(hostname) as with_hostname_count,
-        COUNT(description) as with_description_count
+        COUNT(*) as total_static_ips,
+        COUNT(CASE WHEN hostname IS NOT NULL AND hostname != '' THEN 1 END) as with_hostname,
+        COUNT(CASE WHEN description IS NOT NULL AND description != '' THEN 1 END) as with_description
       FROM static_ips
     `);
     
-    const stats = result.rows[0];
-    console.log('Static IP statistics:', stats);
-    
-    res.json({ 
-      success: true, 
-      stats: {
-        total: parseInt(stats.total_count),
-        withMac: parseInt(stats.with_mac_count),
-        withHostname: parseInt(stats.with_hostname_count),
-        withDescription: parseInt(stats.with_description_count)
-      }
+    res.json({
+      success: true,
+      stats: result.rows[0]
     });
+    
   } catch (error) {
-    console.error('Error fetching statistics:', error.message);
-    res.status(500).json({ error: 'Failed to fetch statistics', details: error.message });
+    console.error('Error getting static IP stats:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
   }
-});
-
-// Initialize database when module is loaded
-initDatabase().catch(err => {
-  console.error('Failed to initialize PostgreSQL database:', err);
-  console.error('Please ensure PostgreSQL is running and credentials are correct');
-  console.error('Check environment variables: DB_HOST, DB_NAME, DB_USER, DB_PASSWORD, DB_PORT');
-  process.exit(1);
-});
-
-// Graceful shutdown
-process.on('SIGINT', async () => {
-  console.log('Shutting down gracefully...');
-  await pool.end();
-  process.exit(0);
 });
 
 module.exports = router;
