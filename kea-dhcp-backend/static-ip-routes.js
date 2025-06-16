@@ -1,4 +1,4 @@
-// static-ip-routes.js - Updated with corrected validation logic
+// static-ip-routes.js - Fixed version without integer overflow in sorting
 const express = require('express');
 const { Pool } = require('pg');
 const fetch = require('node-fetch');
@@ -59,24 +59,18 @@ async function checkDHCPReservations(ipAddress) {
   }
 }
 
-// GET /api/static-ips - Get all static IP assignments
+// GET /api/static-ips - Get all static IP assignments with fixed sorting
 router.get('/static-ips', async (req, res) => {
   try {
     console.log('Fetching all static IP assignments...');
     
+    // Use a simpler sorting approach that doesn't cause integer overflow
     const result = await pool.query(`
       SELECT id, ip_address, mac_address, hostname, description, 
              created_at, updated_at 
       FROM static_ips 
       ORDER BY 
-        CASE 
-          WHEN ip_address ~ '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' THEN
-            CAST(split_part(ip_address, '.', 1) AS INTEGER) * 16777216 +
-            CAST(split_part(ip_address, '.', 2) AS INTEGER) * 65536 +
-            CAST(split_part(ip_address, '.', 3) AS INTEGER) * 256 +
-            CAST(split_part(ip_address, '.', 4) AS INTEGER)
-          ELSE 0 
-        END
+        string_to_array(ip_address, '.')::int[] 
     `);
     
     console.log(`Found ${result.rows.length} static IP assignments`);
@@ -88,14 +82,34 @@ router.get('/static-ips', async (req, res) => {
     
   } catch (error) {
     console.error('Error fetching static IP assignments:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
+    
+    // Fallback to simple string sorting if the array sorting fails
+    try {
+      console.log('Attempting fallback sorting...');
+      const fallbackResult = await pool.query(`
+        SELECT id, ip_address, mac_address, hostname, description, 
+               created_at, updated_at 
+        FROM static_ips 
+        ORDER BY ip_address
+      `);
+      
+      console.log(`Found ${fallbackResult.rows.length} static IP assignments (fallback sorting)`);
+      
+      res.json({
+        success: true,
+        staticIPs: fallbackResult.rows
+      });
+    } catch (fallbackError) {
+      console.error('Fallback sorting also failed:', fallbackError);
+      res.status(500).json({
+        success: false,
+        error: fallbackError.message
+      });
+    }
   }
 });
 
-// POST /api/static-ips - Add new static IP with proper validation (UPDATED)
+// POST /api/static-ips - Add new static IP with proper validation
 router.post('/static-ips', async (req, res) => {
   try {
     const { ip_address, mac_address, hostname, description } = req.body;
@@ -136,7 +150,7 @@ router.post('/static-ips', async (req, res) => {
       });
     }
     
-    // ✅ KEY PART: Check if IP conflicts with DHCP reservations
+    // Check if IP conflicts with DHCP reservations
     const dhcpCheck = await checkDHCPReservations(ip_address);
     
     if (dhcpCheck.conflict) {
@@ -176,7 +190,7 @@ router.post('/static-ips', async (req, res) => {
   }
 });
 
-// PUT /api/static-ips/:id - Update static IP with validation (UPDATED)
+// PUT /api/static-ips/:id - Update static IP with validation
 router.put('/static-ips/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -211,7 +225,7 @@ router.put('/static-ips/:id', async (req, res) => {
         });
       }
       
-      // ✅ Check against DHCP reservations (same logic as POST)
+      // Check against DHCP reservations
       const dhcpCheck = await checkDHCPReservations(ip_address);
       
       if (dhcpCheck.conflict) {

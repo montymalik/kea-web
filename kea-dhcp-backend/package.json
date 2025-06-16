@@ -6,7 +6,9 @@
   "scripts": {
     "start": "node proxy-server.js",
     "dev": "nodemon proxy-server.js",
-    "init-db": "node -e \"const routes = require('./static-ip-routes'); console.log('Database initialized');\""
+    "init-db": "node init-database.js",
+    "migrate-db": "node migrate-database.js",
+    "check-db": "node -e \"const {Pool} = require('pg'); require('dotenv').config(); const pool = new Pool({user: process.env.DB_USER || 'postgres', host: process.env.DB_HOST || 'localhost', database: process.env.DB_NAME || 'kea_dhcp', password: process.env.DB_PASSWORD || 'postgres', port: process.env.DB_PORT || 5432}); pool.query('SELECT table_name, column_name, data_type FROM information_schema.columns WHERE table_schema = \\'public\\' AND table_name IN (\\'static_ips\\', \\'pool_config\\') ORDER BY table_name, ordinal_position').then(res => {console.log('Database structure:'); res.rows.forEach(row => console.log(\\`  \\${row.table_name}.\\${row.column_name}: \\${row.data_type}\\`)); pool.end();}).catch(err => {console.error('Database check failed:', err.message); process.exit(1);});\""
   },
   "dependencies": {
     "cors": "^2.8.5",
