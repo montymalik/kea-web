@@ -1,4 +1,4 @@
-// api.js - Complete Kea DHCP API service with PostgreSQL static IP backend and Pool Configuration
+// api.js - Complete Kea DHCP API service with Prisma backend
 import { findNextAvailableIP } from '../utils/utils';
 
 // Use Docker-accessible proxy server to avoid CORS issues
@@ -25,19 +25,19 @@ const fetchWithAuth = async (url, options = {}) => {
 };
 
 export const api = {
-  // Pool Configuration Management Functions
+  // Pool Configuration Management Functions (Prisma-powered)
   
   /**
-   * Get current pool configuration from database
+   * Get current pool configuration from Prisma database
    */
   async getPoolConfiguration() {
     try {
-      console.log('Fetching pool configuration from database...');
+      console.log('Fetching pool configuration from Prisma database...');
       const response = await fetchWithAuth(`${API_BASE}/pool-config`);
       const data = await response.json();
       
       if (data.success) {
-        console.log('Pool configuration retrieved:', data.poolConfig);
+        console.log('Pool configuration retrieved from Prisma:', data.poolConfig);
         return data.poolConfig;
       } else {
         console.error('Failed to fetch pool configuration:', data.error);
@@ -58,7 +58,7 @@ export const api = {
       return {
         id: null,
         name: 'default',
-        start_ip: '192.168.1.1',
+        start_ip: '192.168.1.2',
         end_ip: '192.168.1.100',
         description: 'Default pool configuration',
         is_active: true,
@@ -68,11 +68,11 @@ export const api = {
   },
 
   /**
-   * Update pool configuration in database
+   * Update pool configuration in Prisma database
    */
   async updatePoolConfiguration(poolData) {
     try {
-      console.log('Updating pool configuration:', poolData);
+      console.log('Updating pool configuration in Prisma:', poolData);
       
       const response = await fetchWithAuth(`${API_BASE}/pool-config`, {
         method: 'POST',
@@ -82,7 +82,7 @@ export const api = {
       const data = await response.json();
       
       if (data.success) {
-        console.log('Pool configuration updated successfully:', data.poolConfig);
+        console.log('Pool configuration updated successfully in Prisma:', data.poolConfig);
         return data.poolConfig;
       } else {
         throw new Error(data.error || 'Failed to update pool configuration');
@@ -125,19 +125,19 @@ export const api = {
     }
   },
 
-  // Static IP Management Functions (using PostgreSQL backend)
+  // Static IP Management Functions (Prisma-powered)
   
   /**
-   * Get all static IP assignments from PostgreSQL database
+   * Get all static IP assignments from Prisma database
    */
   async getStaticIPAssignments() {
     try {
-      console.log('Fetching static IP assignments from PostgreSQL...');
+      console.log('Fetching static IP assignments from Prisma database...');
       const response = await fetchWithAuth(`${API_BASE}/static-ips`);
       const data = await response.json();
       
       if (data.success) {
-        console.log(`Fetched ${data.staticIPs.length} static IP assignments from database`);
+        console.log(`Fetched ${data.staticIPs.length} static IP assignments from Prisma database`);
         return data.staticIPs;
       } else {
         console.error('Failed to fetch static IPs:', data.error);
@@ -149,121 +149,119 @@ export const api = {
     }
   },
 
-// Enhanced error handling functions for better user experience
-/**
- * Add a new static IP assignment with enhanced error handling
- */
-async addStaticIPAssignment(staticIPData) {
-  try {
-    console.log('Adding static IP assignment to database:', staticIPData);
-    
-    const response = await fetchWithAuth(`${API_BASE}/static-ips`, {
-      method: 'POST',
-      body: JSON.stringify(staticIPData)
-    });
-    
-    const data = await response.json();
-    
-    if (data.success) {
-      console.log('Static IP added successfully:', data.staticIP);
-      return data.staticIP;
-    } else {
-      // Enhanced error handling for different conflict types
-      if (response.status === 409 && data.conflictDetails) {
-        const { conflictDetails } = data;
-        
-        switch (conflictDetails.type) {
-          case 'dhcp_reservation':
-            throw new Error(`This IP address is already reserved in DHCP!\n\n` +
-              `IP ${staticIPData.ip_address} is currently assigned to:\n` +
-              `• MAC Address: ${conflictDetails.existing_mac}\n` +
-              `• Device: ${conflictDetails.hostname || 'Unknown device'}\n\n` +
-              `To use this IP for a static assignment, you need to:\n` +
-              `1. Remove the DHCP reservation first, OR\n` +
-              `2. Choose a different IP address outside the reservation pool`);
-              
-          case 'static_ip_exists':
-            throw new Error(`This IP address is already assigned as a static IP!\n\n` +
-              `Please choose a different IP address or edit the existing assignment.`);
-              
-          case 'mac_address_exists':
-            throw new Error(`This MAC address is already assigned to another static IP!\n\n` +
-              `Each device (MAC address) can only have one static IP assignment.`);
-              
-          default:
-            throw new Error(data.error || 'IP address conflict detected');
-        }
-      }
-      
-      // Handle other error types
-      throw new Error(data.error || 'Failed to add static IP');
-    }
-  } catch (error) {
-    console.error('Error adding static IP assignment:', error);
-    throw error;
-  }
-},
+  /**
+   * Add a new static IP assignment with enhanced error handling (Prisma-powered)
+   */
+  async addStaticIPAssignment(staticIPData) {
+    try {
+      console.log('Adding static IP assignment to Prisma database:', staticIPData);
+      
+      const response = await fetchWithAuth(`${API_BASE}/static-ips`, {
+        method: 'POST',
+        body: JSON.stringify(staticIPData)
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        console.log('Static IP added successfully to Prisma:', data.staticIP);
+        return data.staticIP;
+      } else {
+        // Enhanced error handling for different conflict types
+        if (response.status === 409 && data.conflictDetails) {
+          const { conflictDetails } = data;
+          
+          switch (conflictDetails.type) {
+            case 'dhcp_reservation':
+              throw new Error(`This IP address is already reserved in DHCP!\n\n` +
+                `IP ${staticIPData.ip_address} is currently assigned to:\n` +
+                `• MAC Address: ${conflictDetails.existing_mac}\n` +
+                `• Device: ${conflictDetails.hostname || 'Unknown device'}\n\n` +
+                `To use this IP for a static assignment, you need to:\n` +
+                `1. Remove the DHCP reservation first, OR\n` +
+                `2. Choose a different IP address outside the reservation pool`);
+                
+            case 'static_ip_exists':
+              throw new Error(`This IP address is already assigned as a static IP!\n\n` +
+                `Please choose a different IP address or edit the existing assignment.`);
+                
+            case 'mac_address_exists':
+              throw new Error(`This MAC address is already assigned to another static IP!\n\n` +
+                `Each device (MAC address) can only have one static IP assignment.`);
+                
+            default:
+              throw new Error(data.error || 'IP address conflict detected');
+          }
+        }
+        
+        // Handle other error types
+        throw new Error(data.error || 'Failed to add static IP');
+      }
+    } catch (error) {
+      console.error('Error adding static IP assignment:', error);
+      throw error;
+    }
+  },
 
-// Also enhance the updateStaticIPAssignment function:
-/**
- * Update an existing static IP assignment with enhanced error handling
- */
-async updateStaticIPAssignment(staticIPId, updateData) {
-  try {
-    console.log('Updating static IP assignment in database:', staticIPId, updateData);
-    
-    const response = await fetchWithAuth(`${API_BASE}/static-ips/${staticIPId}`, {
-      method: 'PUT',
-      body: JSON.stringify(updateData)
-    });
-    
-    const data = await response.json();
-    
-    if (data.success) {
-      console.log('Static IP updated successfully:', data.staticIP);
-      return data.staticIP;
-    } else {
-      // Enhanced error handling for conflicts during updates
-      if (response.status === 409 && data.conflictDetails) {
-        const { conflictDetails } = data;
-        
-        switch (conflictDetails.type) {
-          case 'dhcp_reservation':
-            throw new Error(`Cannot change to this IP address!\n\n` +
-              `IP ${updateData.ip_address} is already reserved in DHCP for:\n` +
-              `• MAC Address: ${conflictDetails.existing_mac}\n` +
-              `• Device: ${conflictDetails.hostname || 'Unknown device'}\n\n` +
-              `Please choose a different IP address.`);
-              
-          case 'static_ip_exists':
-            throw new Error(`Cannot change to this IP address!\n\n` +
-              `IP ${updateData.ip_address} is already assigned to another static device.\n` +
-              `Please choose a different IP address.`);
-              
-          case 'mac_address_exists':
-            throw new Error(`Cannot change to this MAC address!\n\n` +
-              `MAC ${updateData.mac_address} is already assigned to another static IP.\n` +
-              `Each device (MAC address) can only have one static IP assignment.`);
-              
-          default:
-            throw new Error(data.error || 'IP address conflict detected');
-        }
-      }
-      
-      throw new Error(data.error || 'Failed to update static IP');
-    }
-  } catch (error) {
-    console.error('Error updating static IP assignment:', error);
-    throw error;
-  }
-},
+  /**
+   * Update an existing static IP assignment with enhanced error handling (Prisma-powered)
+   */
+  async updateStaticIPAssignment(staticIPId, updateData) {
+    try {
+      console.log('Updating static IP assignment in Prisma database:', staticIPId, updateData);
+      
+      const response = await fetchWithAuth(`${API_BASE}/static-ips/${staticIPId}`, {
+        method: 'PUT',
+        body: JSON.stringify(updateData)
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        console.log('Static IP updated successfully in Prisma:', data.staticIP);
+        return data.staticIP;
+      } else {
+        // Enhanced error handling for conflicts during updates
+        if (response.status === 409 && data.conflictDetails) {
+          const { conflictDetails } = data;
+          
+          switch (conflictDetails.type) {
+            case 'dhcp_reservation':
+              throw new Error(`Cannot change to this IP address!\n\n` +
+                `IP ${updateData.ip_address} is already reserved in DHCP for:\n` +
+                `• MAC Address: ${conflictDetails.existing_mac}\n` +
+                `• Device: ${conflictDetails.hostname || 'Unknown device'}\n\n` +
+                `Please choose a different IP address.`);
+                
+            case 'static_ip_exists':
+              throw new Error(`Cannot change to this IP address!\n\n` +
+                `IP ${updateData.ip_address} is already assigned to another static device.\n` +
+                `Please choose a different IP address.`);
+                
+            case 'mac_address_exists':
+              throw new Error(`Cannot change to this MAC address!\n\n` +
+                `MAC ${updateData.mac_address} is already assigned to another static IP.\n` +
+                `Each device (MAC address) can only have one static IP assignment.`);
+                
+            default:
+              throw new Error(data.error || 'IP address conflict detected');
+          }
+        }
+        
+        throw new Error(data.error || 'Failed to update static IP');
+      }
+    } catch (error) {
+      console.error('Error updating static IP assignment:', error);
+      throw error;
+    }
+  },
   
   /**
-   * Delete a static IP assignment from PostgreSQL database
+   * Delete a static IP assignment from Prisma database
    */
   async deleteStaticIPAssignment(staticIPId) {
     try {
-      console.log('Deleting static IP assignment from database:', staticIPId);
+      console.log('Deleting static IP assignment from Prisma database:', staticIPId);
       
       const response = await fetchWithAuth(`${API_BASE}/static-ips/${staticIPId}`, {
         method: 'DELETE'
@@ -272,7 +270,7 @@ async updateStaticIPAssignment(staticIPId, updateData) {
       const data = await response.json();
       
       if (data.success) {
-        console.log('Static IP deleted successfully');
+        console.log('Static IP deleted successfully from Prisma');
         return true;
       } else {
         throw new Error(data.error || 'Failed to delete static IP');
@@ -284,11 +282,11 @@ async updateStaticIPAssignment(staticIPId, updateData) {
   },
 
   /**
-   * Check if an IP address is already assigned as a static IP
+   * Check if an IP address is already assigned as a static IP (Prisma-powered)
    */
   async checkStaticIPExists(ipAddress) {
     try {
-      console.log('Checking if static IP exists:', ipAddress);
+      console.log('Checking if static IP exists in Prisma:', ipAddress);
       
       const response = await fetchWithAuth(`${API_BASE}/static-ips/check/${ipAddress}`);
       const data = await response.json();
@@ -307,7 +305,7 @@ async updateStaticIPAssignment(staticIPId, updateData) {
     }
   },
 
-  // Original Kea DHCP API Functions
+  // Original Kea DHCP API Functions (unchanged)
 
   // Test authentication
   async testConnection() {
@@ -329,10 +327,10 @@ async updateStaticIPAssignment(staticIPId, updateData) {
     }
   },
 
-  // Get reserved pool configuration from database (updated to use new pool config)
+  // Get reserved pool configuration from Prisma database
   async getReservedPoolConfig() {
     try {
-      console.log('Fetching reserved pool configuration from database...');
+      console.log('Fetching reserved pool configuration from Prisma database...');
       const poolConfig = await this.getPoolConfiguration();
       
       // Convert database format to the format expected by existing code
@@ -356,7 +354,7 @@ async updateStaticIPAssignment(staticIPId, updateData) {
     }
   },
 
-  // Fetch all data from Kea including static IPs and pool config from PostgreSQL
+  // Fetch all data from Kea including static IPs and pool config from Prisma
   async fetchAllData(subnetId = 1) {
     try {
       console.log(`Fetching all data for subnet ID: ${subnetId}`);
@@ -364,10 +362,10 @@ async updateStaticIPAssignment(staticIPId, updateData) {
         this.getLeases(subnetId),
         this.getReservations(subnetId),
         this.getSubnets(),
-        this.getPoolConfiguration(), // Use new database function
+        this.getPoolConfiguration(), // Use Prisma database function
         this.getStaticIPAssignments()
       ]);
-      console.log('All data fetched successfully from Kea and PostgreSQL.');
+      console.log('All data fetched successfully from Kea and Prisma.');
       
       // Convert pool config to legacy format for backward compatibility
       const reservedPool = poolConfigRes ? {
@@ -387,7 +385,7 @@ async updateStaticIPAssignment(staticIPId, updateData) {
         staticIPs: staticIPsRes || []
       };
     } catch (error) {
-      console.error('Error fetching data from Kea and PostgreSQL:', error);
+      console.error('Error fetching data from Kea and Prisma:', error);
       throw error;
     }
   },
@@ -484,7 +482,7 @@ async updateStaticIPAssignment(staticIPId, updateData) {
     }
   },
 
-  // Get subnets
+  // Get subnets (unchanged)
   async getSubnets() {
     try {
       console.log('Fetching subnet configuration...');
@@ -595,14 +593,14 @@ async updateStaticIPAssignment(staticIPId, updateData) {
     }
   },
 
-  // Get next available IP for a subnet (considers static IPs and uses database pool config)
+  // Get next available IP for a subnet (considers static IPs and uses Prisma pool config)
   async getNextAvailableIP(subnetId) {
     try {
       console.log(`Finding next available IP for subnet ID: ${subnetId}`);
       const [leases, reservations, poolConfig, staticIPs] = await Promise.all([
         this.getLeases(subnetId),
         this.getReservations(subnetId),
-        this.getPoolConfiguration(), // Use database pool config
+        this.getPoolConfiguration(), // Use Prisma database pool config
         this.getStaticIPAssignments()
       ]);
 
@@ -627,7 +625,7 @@ async updateStaticIPAssignment(staticIPId, updateData) {
     }
   },
 
-  // Create reservation (checks against static IPs)
+  // Create reservation (checks against static IPs using Prisma)
   async createReservation(reservationData) {
     try {
       console.log(`Attempting to create reservation for IP: ${reservationData.ipv4_address}`);
@@ -667,7 +665,7 @@ async updateStaticIPAssignment(staticIPId, updateData) {
     }
   },
 
-  // Delete lease
+  // Delete lease (unchanged)
   async deleteLease(ipAddress) {
     try {
       console.log(`Attempting to delete lease for IP: ${ipAddress}`);
@@ -697,7 +695,7 @@ async updateStaticIPAssignment(staticIPId, updateData) {
     }
   },
 
-  // Update/modify reservation with lease management (checks against static IPs)
+  // Update/modify reservation with lease management (checks against static IPs using Prisma)
   async updateReservation(hostId, reservationData, originalData = null) {
     try {
       console.log(`Attempting to update reservation for Host ID: ${hostId}, IP: ${reservationData.ipv4_address}`);
@@ -758,7 +756,7 @@ async updateStaticIPAssignment(staticIPId, updateData) {
     }
   },
 
-  // Delete reservation
+  // Delete reservation (unchanged)
   async deleteReservation(reservation) {
     try {
       console.log(`Attempting to delete reservation for IP: ${reservation.ip_address || reservation['ip-address']}`);
@@ -789,7 +787,7 @@ async updateStaticIPAssignment(staticIPId, updateData) {
     }
   },
 
-  // Force DHCP renewal (placeholder)
+  // Force DHCP renewal (placeholder - unchanged)
   async forceRenewal(macAddress) {
     try {
       console.log(`Attempting to force DHCP renewal for MAC: ${macAddress}`);
@@ -800,7 +798,7 @@ async updateStaticIPAssignment(staticIPId, updateData) {
     }
   },
 
-  // HA Configuration functions
+  // HA Configuration functions (unchanged)
   async checkHAConfiguration() {
     try {
       console.log('[HA Detection] Checking if HA hook is loaded...');
@@ -895,7 +893,7 @@ async updateStaticIPAssignment(staticIPId, updateData) {
     }
   },
 
-  // HA Heartbeat monitoring
+  // HA Heartbeat monitoring (unchanged)
   async getHAHeartbeat(serverName = null) {
     const actualServerName = serverName || "unknown-server";
     try {
@@ -947,7 +945,7 @@ async updateStaticIPAssignment(staticIPId, updateData) {
     }
   },
 
-  // Check HA status
+  // Check HA status (unchanged)
   async getHAStatus() {
     try {
       console.log('--- Starting HA Status Check ---');
@@ -1012,7 +1010,7 @@ async updateStaticIPAssignment(staticIPId, updateData) {
     }
   },
 
-  // Evaluate overall HA health
+  // Evaluate overall HA health (unchanged)
   evaluateHAStatus(serverStatuses) {
     console.log('[HA Evaluation] Starting evaluation with:', JSON.stringify(serverStatuses, null, 2));
             

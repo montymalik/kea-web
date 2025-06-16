@@ -1,25 +1,31 @@
 {
   "name": "kea-dhcp-manager-backend",
   "version": "1.0.0",
-  "description": "Backend API for Kea DHCP management with PostgreSQL static IP storage",
+  "description": "Backend API for Kea DHCP management with Prisma PostgreSQL integration",
   "main": "proxy-server.js",
   "scripts": {
     "start": "node proxy-server.js",
     "dev": "nodemon proxy-server.js",
-    "init-db": "node init-database.js",
-    "migrate-db": "node migrate-database.js",
-    "check-db": "node -e \"const {Pool} = require('pg'); require('dotenv').config(); const pool = new Pool({user: process.env.DB_USER || 'postgres', host: process.env.DB_HOST || 'localhost', database: process.env.DB_NAME || 'kea_dhcp', password: process.env.DB_PASSWORD || 'postgres', port: process.env.DB_PORT || 5432}); pool.query('SELECT table_name, column_name, data_type FROM information_schema.columns WHERE table_schema = \\'public\\' AND table_name IN (\\'static_ips\\', \\'pool_config\\') ORDER BY table_name, ordinal_position').then(res => {console.log('Database structure:'); res.rows.forEach(row => console.log(\\`  \\${row.table_name}.\\${row.column_name}: \\${row.data_type}\\`)); pool.end();}).catch(err => {console.error('Database check failed:', err.message); process.exit(1);});\""
+    "db:generate": "prisma generate",
+    "db:push": "prisma db push",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:reset": "prisma migrate reset",
+    "db:seed": "node prisma/seed.js",
+    "db:studio": "prisma studio",
+    "postinstall": "prisma generate"
   },
   "dependencies": {
+    "@prisma/client": "^5.22.0",
     "cors": "^2.8.5",
     "dotenv": "^16.5.0",
     "express": "^4.18.2",
     "http-proxy-middleware": "^3.0.5",
-    "node-fetch": "^2.7.0",
-    "pg": "^8.16.0"
+    "node-fetch": "^2.7.0"
   },
   "devDependencies": {
-    "nodemon": "^3.0.1"
+    "nodemon": "^3.0.1",
+    "prisma": "^5.22.0"
   },
   "author": "",
   "license": "MIT"

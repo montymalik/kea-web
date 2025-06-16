@@ -1,28 +1,36 @@
-// pool-config-routes.js - Updated with corrected validation logic
+// pool-config-routes.js - Updated with Prisma ORM
 const express = require('express');
-const { Pool } = require('pg');
+const { PrismaClient } = require('@prisma/client');
 const router = express.Router();
 
-// Database connection
-const pool = new Pool({
-  user: process.env.DB_USER || 'postgres',
-  host: process.env.DB_HOST || 'localhost',
-  database: process.env.DB_NAME || 'kea_dhcp',
-  password: process.env.DB_PASSWORD || 'postgres',
-  port: process.env.DB_PORT || 5432,
-});
+// Initialize Prisma client
+const prisma = new PrismaClient();
 
 // GET /api/pool-config - Get current pool configuration
 router.get('/pool-config', async (req, res) => {
   try {
-    const result = await pool.query(
-      'SELECT * FROM pool_config WHERE is_active = true ORDER BY created_at DESC LIMIT 1'
-    );
+    const poolConfig = await prisma.poolConfig.findFirst({
+      where: { isActive: true },
+      orderBy: { createdAt: 'desc' }
+    });
     
-    if (result.rows.length > 0) {
+    if (poolConfig) {
+      // Convert to frontend format
+      const formattedPoolConfig = {
+        id: poolConfig.id,
+        name: poolConfig.name,
+        start_ip: poolConfig.startIp,
+        end_ip: poolConfig.endIp,
+        total: poolConfig.total,
+        description: poolConfig.description,
+        is_active: poolConfig.isActive,
+        created_at: poolConfig.createdAt,
+        updated_at: poolConfig.updatedAt
+      };
+      
       res.json({
         success: true,
-        poolConfig: result.rows[0]
+        poolConfig: formattedPoolConfig
       });
     } else {
       // No configuration exists, return default
@@ -85,35 +93,56 @@ router.post('/pool-config', async (req, res) => {
     }
     
     // First, try to update existing active configuration
-    const updateResult = await pool.query(
-      `UPDATE pool_config 
-       SET start_ip = $1, end_ip = $2, description = $3, total = $4, name = $5, updated_at = NOW()
-       WHERE is_active = true
-       RETURNING *`,
-      [start_ip, end_ip, description, total, name]
-    );
+    const existingConfig = await prisma.poolConfig.findFirst({
+      where: { isActive: true }
+    });
     
     let poolConfig;
     
-    if (updateResult.rows.length > 0) {
-      // Successfully updated existing config
-      poolConfig = updateResult.rows[0];
+    if (existingConfig) {
+      // Update existing config
+      poolConfig = await prisma.poolConfig.update({
+        where: { id: existingConfig.id },
+        data: {
+          startIp: start_ip,
+          endIp: end_ip,
+          description: description,
+          total: total,
+          name: name
+        }
+      });
       console.log('Updated existing pool configuration:', poolConfig);
     } else {
-      // No active config exists, create new one
-      const insertResult = await pool.query(
-        `INSERT INTO pool_config (name, start_ip, end_ip, description, total, is_active, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, true, NOW(), NOW())
-         RETURNING *`,
-        [name, start_ip, end_ip, description, total]
-      );
-      poolConfig = insertResult.rows[0];
+      // Create new config
+      poolConfig = await prisma.poolConfig.create({
+        data: {
+          name: name,
+          startIp: start_ip,
+          endIp: end_ip,
+          description: description,
+          total: total,
+          isActive: true
+        }
+      });
       console.log('Created new pool configuration:', poolConfig);
     }
     
+    // Convert to frontend format
+    const formattedPoolConfig = {
+      id: poolConfig.id,
+      name: poolConfig.name,
+      start_ip: poolConfig.startIp,
+      end_ip: poolConfig.endIp,
+      total: poolConfig.total,
+      description: poolConfig.description,
+      is_active: poolConfig.isActive,
+      created_at: poolConfig.createdAt,
+      updated_at: poolConfig.updatedAt
+    };
+    
     res.json({
       success: true,
-      poolConfig: poolConfig
+      poolConfig: formattedPoolConfig
     });
     
   } catch (error) {
@@ -138,27 +167,43 @@ router.put('/pool-config/:id', async (req, res) => {
     const endOctets = end_ip.split('.').map(Number);
     const total = (endOctets[3] - startOctets[3]) + 1;
     
-    const result = await pool.query(
-      `UPDATE pool_config 
-       SET start_ip = $1, end_ip = $2, description = $3, total = $4, name = $5, updated_at = NOW()
-       WHERE id = $6
-       RETURNING *`,
-      [start_ip, end_ip, description, total, name, id]
-    );
+    const poolConfig = await prisma.poolConfig.update({
+      where: { id: parseInt(id) },
+      data: {
+        startIp: start_ip,
+        endIp: end_ip,
+        description: description,
+        total: total,
+        name: name
+      }
+    });
     
-    if (result.rows.length === 0) {
+    // Convert to frontend format
+    const formattedPoolConfig = {
+      id: poolConfig.id,
+      name: poolConfig.name,
+      start_ip: poolConfig.startIp,
+      end_ip: poolConfig.endIp,
+      total: poolConfig.total,
+      description: poolConfig.description,
+      is_active: poolConfig.isActive,
+      created_at: poolConfig.createdAt,
+      updated_at: poolConfig.updatedAt
+    };
+    
+    res.json({
+      success: true,
+      poolConfig: formattedPoolConfig
+    });
+    
+  } catch (error) {
+    if (error.code === 'P2025') { // Prisma "Record not found" error
       return res.status(404).json({
         success: false,
         error: 'Pool configuration not found'
       });
     }
     
-    res.json({
-      success: true,
-      poolConfig: result.rows[0]
-    });
-    
-  } catch (error) {
     console.error('Error updating pool configuration:', error);
     res.status(500).json({
       success: false,
@@ -173,11 +218,14 @@ router.delete('/pool-config/reset', async (req, res) => {
     console.log('Resetting pool configuration...');
     
     // Get count before deletion
-    const countResult = await pool.query('SELECT COUNT(*) FROM pool_config WHERE is_active = true');
-    const deletedCount = parseInt(countResult.rows[0].count);
+    const deletedCount = await prisma.poolConfig.count({
+      where: { isActive: true }
+    });
     
     // Delete all active configurations
-    await pool.query('DELETE FROM pool_config WHERE is_active = true');
+    await prisma.poolConfig.deleteMany({
+      where: { isActive: true }
+    });
     
     console.log(`Deleted ${deletedCount} pool configuration(s)`);
     
@@ -196,7 +244,7 @@ router.delete('/pool-config/reset', async (req, res) => {
   }
 });
 
-// GET /api/pool-config/validate - Validate pool configuration (CORRECTED - NO reservation check)
+// GET /api/pool-config/validate - Validate pool configuration
 router.get('/pool-config/validate', async (req, res) => {
   try {
     const { start_ip, end_ip } = req.query;
@@ -237,7 +285,7 @@ router.get('/pool-config/validate', async (req, res) => {
       });
     }
     
-    // ✅ CORRECTED: Pool range validation passes - no need to check against reservations
+    // Pool range validation passes - no need to check against reservations
     // Reservations can coexist within the static IP pool range
     res.json({
       success: true,
@@ -255,6 +303,11 @@ router.get('/pool-config/validate', async (req, res) => {
       error: error.message
     });
   }
+});
+
+// Graceful shutdown
+process.on('beforeExit', async () => {
+  await prisma.$disconnect();
 });
 
 module.exports = router;

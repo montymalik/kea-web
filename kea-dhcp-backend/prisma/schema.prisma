@@ -1,0 +1,40 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model StaticIP {
+  id          Int      @id @default(autoincrement())
+  ipAddress   String   @unique @map("ip_address") @db.VarChar(15)
+  macAddress  String?  @map("mac_address") @db.VarChar(17)
+  hostname    String?  @db.VarChar(255)
+  description String?  @db.Text
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("static_ips")
+  @@index([ipAddress])
+  @@index([macAddress])
+}
+
+model PoolConfig {
+  id          Int      @id @default(autoincrement())
+  name        String   @default("default") @db.VarChar(100)
+  startIp     String   @map("start_ip") @db.VarChar(15)
+  endIp       String   @map("end_ip") @db.VarChar(15)
+  total       Int
+  description String?  @db.Text
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("pool_config")
+  @@index([isActive])
+}

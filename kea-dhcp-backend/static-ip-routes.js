@@ -1,18 +1,12 @@
-// static-ip-routes.js - Updated with enhanced error messages and fixed sorting
+// static-ip-routes.js - Updated with Prisma ORM
 const express = require('express');
-const { Pool } = require('pg');
+const { PrismaClient } = require('@prisma/client');
 const fetch = require('node-fetch');
 const config = require('./config');
 const router = express.Router();
 
-// Database connection
-const pool = new Pool({
-  user: process.env.DB_USER || 'postgres',
-  host: process.env.DB_HOST || 'localhost',
-  database: process.env.DB_NAME || 'kea_dhcp',
-  password: process.env.DB_PASSWORD || 'postgres',
-  port: process.env.DB_PORT || 5432,
-});
+// Initialize Prisma client
+const prisma = new PrismaClient();
 
 // Get Kea server URL from config
 const KEA_SERVER = config.keaServer;
@@ -59,84 +53,47 @@ async function checkDHCPReservations(ipAddress) {
   }
 }
 
-// GET /api/static-ips - Get all static IP assignments with robust sorting and data validation
+// GET /api/static-ips - Get all static IP assignments
 router.get('/static-ips', async (req, res) => {
   try {
     console.log('Fetching all static IP assignments...');
     
-    // First, try to get all data and validate IP addresses
-    const result = await pool.query(`
-      SELECT id, ip_address, mac_address, hostname, description, 
-             created_at, updated_at 
-      FROM static_ips
-    `);
-    
-    console.log(`Found ${result.rows.length} static IP assignments`);
-    
-    // Validate and clean up IP addresses, then sort in JavaScript
-    const staticIPs = result.rows.map(row => {
-      // Clean up IP address - remove any invalid characters
-      if (row.ip_address) {
-        row.ip_address = row.ip_address.replace(/[^0-9.]/g, '');
-      }
-      return row;
-    });
-    
-    // Sort IP addresses properly in JavaScript
-    staticIPs.sort((a, b) => {
-      const ipA = a.ip_address || '';
-      const ipB = b.ip_address || '';
-      
-      // Split IP addresses into parts
-      const partsA = ipA.split('.').map(part => parseInt(part) || 0);
-      const partsB = ipB.split('.').map(part => parseInt(part) || 0);
-      
-      // Compare each octet
-      for (let i = 0; i < 4; i++) {
-        const numA = partsA[i] || 0;
-        const numB = partsB[i] || 0;
-        if (numA !== numB) {
-          return numA - numB;
+    const staticIPs = await prisma.staticIP.findMany({
+      orderBy: [
+        {
+          ipAddress: 'asc'
         }
-      }
-      return 0;
+      ]
     });
+    
+    console.log(`Found ${staticIPs.length} static IP assignments`);
+    
+    // Convert Prisma camelCase to snake_case for frontend compatibility
+    const formattedStaticIPs = staticIPs.map(ip => ({
+      id: ip.id,
+      ip_address: ip.ipAddress,
+      mac_address: ip.macAddress,
+      hostname: ip.hostname,
+      description: ip.description,
+      created_at: ip.createdAt,
+      updated_at: ip.updatedAt
+    }));
     
     res.json({
       success: true,
-      staticIPs: staticIPs
+      staticIPs: formattedStaticIPs
     });
     
   } catch (error) {
     console.error('Error fetching static IP assignments:', error);
-    
-    // Final fallback - get data without any sorting
-    try {
-      console.log('Attempting final fallback - no sorting...');
-      const fallbackResult = await pool.query(`
-        SELECT id, ip_address, mac_address, hostname, description, 
-               created_at, updated_at 
-        FROM static_ips
-      `);
-      
-      console.log(`Found ${fallbackResult.rows.length} static IP assignments (no sorting)`);
-      
-      res.json({
-        success: true,
-        staticIPs: fallbackResult.rows,
-        warning: 'IP addresses may not be sorted due to data issues'
-      });
-    } catch (fallbackError) {
-      console.error('Final fallback also failed:', fallbackError);
-      res.status(500).json({
-        success: false,
-        error: fallbackError.message
-      });
-    }
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
   }
 });
 
-// POST /api/static-ips - Add new static IP with enhanced error messages
+// POST /api/static-ips - Add new static IP with enhanced error handling
 router.post('/static-ips', async (req, res) => {
   try {
     const { ip_address, mac_address, hostname, description } = req.body;
@@ -144,47 +101,57 @@ router.post('/static-ips', async (req, res) => {
     console.log('Adding static IP assignment:', { ip_address, mac_address, hostname });
     
     // Validate required fields
-    if (!ip_address || !mac_address) {
+    if (!ip_address) {
       return res.status(400).json({
         success: false,
-        error: 'ip_address and mac_address are required'
+        error: 'ip_address is required'
       });
     }
     
     // Check if IP already exists as a static IP
-    const existingStaticIP = await pool.query(
-      'SELECT * FROM static_ips WHERE ip_address = $1',
-      [ip_address]
-    );
+    const existingStaticIP = await prisma.staticIP.findUnique({
+      where: { ipAddress: ip_address }
+    });
     
-    if (existingStaticIP.rows.length > 0) {
+    if (existingStaticIP) {
       return res.status(409).json({
         success: false,
-        error: `This IP address is already assigned as a static IP!\n\nIP ${ip_address} is already assigned to:\n• Device: ${existingStaticIP.rows[0].hostname || 'Unknown'}\n• MAC: ${existingStaticIP.rows[0].mac_address || 'Unknown'}\n\nPlease choose a different IP address or edit the existing assignment.`,
+        error: `This IP address is already assigned as a static IP!\n\nIP ${ip_address} is already assigned to:\n• Device: ${existingStaticIP.hostname || 'Unknown'}\n• MAC: ${existingStaticIP.macAddress || 'Unknown'}\n\nPlease choose a different IP address or edit the existing assignment.`,
         conflictDetails: {
           type: 'static_ip_exists',
-          existing_static_ip: existingStaticIP.rows[0],
+          existing_static_ip: {
+            id: existingStaticIP.id,
+            ip_address: existingStaticIP.ipAddress,
+            mac_address: existingStaticIP.macAddress,
+            hostname: existingStaticIP.hostname
+          },
           conflicting_ip: ip_address
         }
       });
     }
     
-    // Check if MAC already exists
-    const existingMAC = await pool.query(
-      'SELECT * FROM static_ips WHERE mac_address = $1',
-      [mac_address]
-    );
-    
-    if (existingMAC.rows.length > 0) {
-      return res.status(409).json({
-        success: false,
-        error: `This MAC address is already assigned to another static IP!\n\nMAC ${mac_address} is currently assigned to:\n• IP Address: ${existingMAC.rows[0].ip_address}\n• Device: ${existingMAC.rows[0].hostname || 'Unknown'}\n\nEach device (MAC address) can only have one static IP assignment.`,
-        conflictDetails: {
-          type: 'mac_address_exists',
-          existing_static_ip: existingMAC.rows[0],
-          conflicting_mac: mac_address
-        }
+    // Check if MAC already exists (only if MAC is provided)
+    if (mac_address) {
+      const existingMAC = await prisma.staticIP.findFirst({
+        where: { macAddress: mac_address }
       });
+      
+      if (existingMAC) {
+        return res.status(409).json({
+          success: false,
+          error: `This MAC address is already assigned to another static IP!\n\nMAC ${mac_address} is currently assigned to:\n• IP Address: ${existingMAC.ipAddress}\n• Device: ${existingMAC.hostname || 'Unknown'}\n\nEach device (MAC address) can only have one static IP assignment.`,
+          conflictDetails: {
+            type: 'mac_address_exists',
+            existing_static_ip: {
+              id: existingMAC.id,
+              ip_address: existingMAC.ipAddress,
+              mac_address: existingMAC.macAddress,
+              hostname: existingMAC.hostname
+            },
+            conflicting_mac: mac_address
+          }
+        });
+      }
     }
     
     // Check if IP conflicts with DHCP reservations
@@ -204,19 +171,32 @@ router.post('/static-ips', async (req, res) => {
       });
     }
     
-    // Insert the new static IP assignment
-    const result = await pool.query(
-      `INSERT INTO static_ips (ip_address, mac_address, hostname, description, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, NOW(), NOW())
-       RETURNING *`,
-      [ip_address, mac_address, hostname || '', description || '']
-    );
+    // Create the new static IP assignment
+    const newStaticIP = await prisma.staticIP.create({
+      data: {
+        ipAddress: ip_address,
+        macAddress: mac_address || null,
+        hostname: hostname || null,
+        description: description || null
+      }
+    });
     
-    console.log('Static IP assignment created successfully:', result.rows[0]);
+    console.log('Static IP assignment created successfully:', newStaticIP);
+    
+    // Convert to frontend format
+    const formattedStaticIP = {
+      id: newStaticIP.id,
+      ip_address: newStaticIP.ipAddress,
+      mac_address: newStaticIP.macAddress,
+      hostname: newStaticIP.hostname,
+      description: newStaticIP.description,
+      created_at: newStaticIP.createdAt,
+      updated_at: newStaticIP.updatedAt
+    };
     
     res.json({
       success: true,
-      staticIP: result.rows[0],
+      staticIP: formattedStaticIP,
       message: 'Static IP assignment created successfully'
     });
     
@@ -229,7 +209,7 @@ router.post('/static-ips', async (req, res) => {
   }
 });
 
-// PUT /api/static-ips/:id - Update static IP with enhanced error messages
+// PUT /api/static-ips/:id - Update static IP with enhanced error handling
 router.put('/static-ips/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -238,32 +218,39 @@ router.put('/static-ips/:id', async (req, res) => {
     console.log(`Updating static IP assignment ID ${id}:`, { ip_address, mac_address, hostname });
     
     // Get current static IP to compare
-    const currentResult = await pool.query('SELECT * FROM static_ips WHERE id = $1', [id]);
+    const currentStaticIP = await prisma.staticIP.findUnique({
+      where: { id: parseInt(id) }
+    });
     
-    if (currentResult.rows.length === 0) {
+    if (!currentStaticIP) {
       return res.status(404).json({
         success: false,
         error: 'Static IP assignment not found'
       });
     }
     
-    const currentStaticIP = currentResult.rows[0];
-    
     // If IP address is changing, check for conflicts
-    if (ip_address && ip_address !== currentStaticIP.ip_address) {
+    if (ip_address && ip_address !== currentStaticIP.ipAddress) {
       // Check if new IP already exists as a static IP
-      const existingStaticIP = await pool.query(
-        'SELECT * FROM static_ips WHERE ip_address = $1 AND id != $2',
-        [ip_address, id]
-      );
+      const existingStaticIP = await prisma.staticIP.findFirst({
+        where: { 
+          ipAddress: ip_address,
+          id: { not: parseInt(id) }
+        }
+      });
       
-      if (existingStaticIP.rows.length > 0) {
+      if (existingStaticIP) {
         return res.status(409).json({
           success: false,
-          error: `Cannot change to this IP address!\n\nIP ${ip_address} is already assigned to:\n• Device: ${existingStaticIP.rows[0].hostname || 'Unknown'}\n• MAC: ${existingStaticIP.rows[0].mac_address || 'Unknown'}\n\nPlease choose a different IP address.`,
+          error: `Cannot change to this IP address!\n\nIP ${ip_address} is already assigned to:\n• Device: ${existingStaticIP.hostname || 'Unknown'}\n• MAC: ${existingStaticIP.macAddress || 'Unknown'}\n\nPlease choose a different IP address.`,
           conflictDetails: {
             type: 'static_ip_exists',
-            existing_static_ip: existingStaticIP.rows[0],
+            existing_static_ip: {
+              id: existingStaticIP.id,
+              ip_address: existingStaticIP.ipAddress,
+              mac_address: existingStaticIP.macAddress,
+              hostname: existingStaticIP.hostname
+            },
             conflicting_ip: ip_address
           }
         });
@@ -287,20 +274,27 @@ router.put('/static-ips/:id', async (req, res) => {
       }
     }
     
-    // If MAC address is changing, check for conflicts
-    if (mac_address && mac_address !== currentStaticIP.mac_address) {
-      const existingMAC = await pool.query(
-        'SELECT * FROM static_ips WHERE mac_address = $1 AND id != $2',
-        [mac_address, id]
-      );
+    // If MAC address is changing, check for conflicts (only if MAC is provided)
+    if (mac_address && mac_address !== currentStaticIP.macAddress) {
+      const existingMAC = await prisma.staticIP.findFirst({
+        where: { 
+          macAddress: mac_address,
+          id: { not: parseInt(id) }
+        }
+      });
       
-      if (existingMAC.rows.length > 0) {
+      if (existingMAC) {
         return res.status(409).json({
           success: false,
-          error: `Cannot change to this MAC address!\n\nMAC ${mac_address} is already assigned to:\n• IP Address: ${existingMAC.rows[0].ip_address}\n• Device: ${existingMAC.rows[0].hostname || 'Unknown'}\n\nPlease choose a different MAC address.`,
+          error: `Cannot change to this MAC address!\n\nMAC ${mac_address} is already assigned to:\n• IP Address: ${existingMAC.ipAddress}\n• Device: ${existingMAC.hostname || 'Unknown'}\n\nPlease choose a different MAC address.`,
           conflictDetails: {
             type: 'mac_address_exists',
-            existing_static_ip: existingMAC.rows[0],
+            existing_static_ip: {
+              id: existingMAC.id,
+              ip_address: existingMAC.ipAddress,
+              mac_address: existingMAC.macAddress,
+              hostname: existingMAC.hostname
+            },
             conflicting_mac: mac_address
           }
         });
@@ -308,21 +302,30 @@ router.put('/static-ips/:id', async (req, res) => {
     }
     
     // Update the static IP assignment
-    const result = await pool.query(
-      `UPDATE static_ips 
-       SET ip_address = COALESCE($1, ip_address),
-           mac_address = COALESCE($2, mac_address),
-           hostname = COALESCE($3, hostname),
-           description = COALESCE($4, description),
-           updated_at = NOW()
-       WHERE id = $5
-       RETURNING *`,
-      [ip_address, mac_address, hostname, description, id]
-    );
+    const updatedStaticIP = await prisma.staticIP.update({
+      where: { id: parseInt(id) },
+      data: {
+        ...(ip_address !== undefined && { ipAddress: ip_address }),
+        ...(mac_address !== undefined && { macAddress: mac_address || null }),
+        ...(hostname !== undefined && { hostname: hostname || null }),
+        ...(description !== undefined && { description: description || null })
+      }
+    });
+    
+    // Convert to frontend format
+    const formattedStaticIP = {
+      id: updatedStaticIP.id,
+      ip_address: updatedStaticIP.ipAddress,
+      mac_address: updatedStaticIP.macAddress,
+      hostname: updatedStaticIP.hostname,
+      description: updatedStaticIP.description,
+      created_at: updatedStaticIP.createdAt,
+      updated_at: updatedStaticIP.updatedAt
+    };
     
     res.json({
       success: true,
-      staticIP: result.rows[0],
+      staticIP: formattedStaticIP,
       message: 'Static IP assignment updated successfully'
     });
     
@@ -340,21 +343,31 @@ router.get('/static-ips/:id', async (req, res) => {
   try {
     const { id } = req.params;
     
-    const result = await pool.query(
-      'SELECT * FROM static_ips WHERE id = $1',
-      [id]
-    );
+    const staticIP = await prisma.staticIP.findUnique({
+      where: { id: parseInt(id) }
+    });
     
-    if (result.rows.length === 0) {
+    if (!staticIP) {
       return res.status(404).json({
         success: false,
         error: 'Static IP assignment not found'
       });
     }
     
+    // Convert to frontend format
+    const formattedStaticIP = {
+      id: staticIP.id,
+      ip_address: staticIP.ipAddress,
+      mac_address: staticIP.macAddress,
+      hostname: staticIP.hostname,
+      description: staticIP.description,
+      created_at: staticIP.createdAt,
+      updated_at: staticIP.updatedAt
+    };
+    
     res.json({
       success: true,
-      staticIP: result.rows[0]
+      staticIP: formattedStaticIP
     });
     
   } catch (error) {
@@ -373,27 +386,37 @@ router.delete('/static-ips/:id', async (req, res) => {
     
     console.log(`Deleting static IP assignment ID: ${id}`);
     
-    const result = await pool.query(
-      'DELETE FROM static_ips WHERE id = $1 RETURNING *',
-      [id]
-    );
+    const deletedStaticIP = await prisma.staticIP.delete({
+      where: { id: parseInt(id) }
+    });
     
-    if (result.rows.length === 0) {
+    console.log('Static IP assignment deleted:', deletedStaticIP);
+    
+    // Convert to frontend format
+    const formattedStaticIP = {
+      id: deletedStaticIP.id,
+      ip_address: deletedStaticIP.ipAddress,
+      mac_address: deletedStaticIP.macAddress,
+      hostname: deletedStaticIP.hostname,
+      description: deletedStaticIP.description,
+      created_at: deletedStaticIP.createdAt,
+      updated_at: deletedStaticIP.updatedAt
+    };
+    
+    res.json({
+      success: true,
+      message: 'Static IP assignment deleted successfully',
+      deletedStaticIP: formattedStaticIP
+    });
+    
+  } catch (error) {
+    if (error.code === 'P2025') { // Prisma "Record not found" error
       return res.status(404).json({
         success: false,
         error: 'Static IP assignment not found'
       });
     }
     
-    console.log('Static IP assignment deleted:', result.rows[0]);
-    
-    res.json({
-      success: true,
-      message: 'Static IP assignment deleted successfully',
-      deletedStaticIP: result.rows[0]
-    });
-    
-  } catch (error) {
     console.error('Error deleting static IP assignment:', error);
     res.status(500).json({
       success: false,
@@ -409,15 +432,27 @@ router.get('/static-ips/check/:ip', async (req, res) => {
     
     console.log(`Checking if IP ${ip} is assigned as static IP`);
     
-    const result = await pool.query(
-      'SELECT * FROM static_ips WHERE ip_address = $1',
-      [ip]
-    );
+    const staticIP = await prisma.staticIP.findUnique({
+      where: { ipAddress: ip }
+    });
+    
+    let formattedStaticIP = null;
+    if (staticIP) {
+      formattedStaticIP = {
+        id: staticIP.id,
+        ip_address: staticIP.ipAddress,
+        mac_address: staticIP.macAddress,
+        hostname: staticIP.hostname,
+        description: staticIP.description,
+        created_at: staticIP.createdAt,
+        updated_at: staticIP.updatedAt
+      };
+    }
     
     res.json({
       success: true,
-      exists: result.rows.length > 0,
-      staticIP: result.rows.length > 0 ? result.rows[0] : null
+      exists: !!staticIP,
+      staticIP: formattedStaticIP
     });
     
   } catch (error) {
@@ -435,21 +470,17 @@ router.delete('/static-ips/reset', async (req, res) => {
     console.log('Resetting static IP database...');
     
     // Get count before deletion
-    const countResult = await pool.query('SELECT COUNT(*) FROM static_ips');
-    const deletedCount = parseInt(countResult.rows[0].count);
+    const countResult = await prisma.staticIP.count();
     
     // Delete all records
-    await pool.query('DELETE FROM static_ips');
+    await prisma.staticIP.deleteMany();
     
-    // Reset sequence if you have auto-increment ID
-    await pool.query('ALTER SEQUENCE static_ips_id_seq RESTART WITH 1');
-    
-    console.log(`Deleted ${deletedCount} static IP assignment(s)`);
+    console.log(`Deleted ${countResult} static IP assignment(s)`);
     
     res.json({
       success: true,
       message: 'Static IP database reset successfully',
-      deletedCount: deletedCount
+      deletedCount: countResult
     });
     
   } catch (error) {
@@ -464,17 +495,25 @@ router.delete('/static-ips/reset', async (req, res) => {
 // GET /api/static-ips/stats - Get static IP statistics
 router.get('/static-ips/stats', async (req, res) => {
   try {
-    const result = await pool.query(`
-      SELECT 
-        COUNT(*) as total_static_ips,
-        COUNT(CASE WHEN hostname IS NOT NULL AND hostname != '' THEN 1 END) as with_hostname,
-        COUNT(CASE WHEN description IS NOT NULL AND description != '' THEN 1 END) as with_description
-      FROM static_ips
-    `);
+    const totalStaticIPs = await prisma.staticIP.count();
+    const withHostname = await prisma.staticIP.count({
+      where: {
+        hostname: { not: null }
+      }
+    });
+    const withDescription = await prisma.staticIP.count({
+      where: {
+        description: { not: null }
+      }
+    });
     
     res.json({
       success: true,
-      stats: result.rows[0]
+      stats: {
+        total_static_ips: totalStaticIPs,
+        with_hostname: withHostname,
+        with_description: withDescription
+      }
     });
     
   } catch (error) {
@@ -484,6 +523,11 @@ router.get('/static-ips/stats', async (req, res) => {
       error: error.message
     });
   }
+});
+
+// Graceful shutdown
+process.on('beforeExit', async () => {
+  await prisma.$disconnect();
 });
 
 module.exports = router;

@@ -1,12 +1,14 @@
-// proxy-server.js - Updated with pool configuration routes and database-aware health checks
+// proxy-server.js - Updated with Prisma integration
 const express = require('express');
 const cors = require('cors');
 const fetch = require('node-fetch');
+const { PrismaClient } = require('@prisma/client');
 const config = require('./config');
-const staticIPRoutes = require('./static-ip-routes'); // Import the static IP routes
-const poolConfigRoutes = require('./pool-config-routes'); // Import the new pool config routes
+const staticIPRoutes = require('./static-ip-routes');
+const poolConfigRoutes = require('./pool-config-routes');
 
 const app = express();
+const prisma = new PrismaClient();
 
 // Validate configuration on startup
 config.validate();
@@ -30,36 +32,25 @@ app.use(express.json());
 app.get('/health', async (req, res) => {
   try {
     // Try to get pool configuration from database
-    const { Pool } = require('pg');
-    const pool = new Pool({
-      user: process.env.DB_USER || 'postgres',
-      host: process.env.DB_HOST || 'localhost',
-      database: process.env.DB_NAME || 'kea_dhcp',
-      password: process.env.DB_PASSWORD || 'postgres',
-      port: process.env.DB_PORT || 5432,
+    const poolConfig = await prisma.poolConfig.findFirst({
+      where: { isActive: true },
+      orderBy: { createdAt: 'desc' }
     });
     
-    const client = await pool.connect();
-    const result = await client.query(
-      'SELECT HOST(start_ip) as start_ip, HOST(end_ip) as end_ip, description FROM pool_config WHERE is_active = true LIMIT 1'
-    );
-    client.release();
-    pool.end();
-    
-    const poolInfo = result.rows.length > 0 
-      ? `${result.rows[0].start_ip} - ${result.rows[0].end_ip}` 
+    const poolInfo = poolConfig 
+      ? `${poolConfig.startIp} - ${poolConfig.endIp}` 
       : 'Database default';
     
-    const poolDescription = result.rows.length > 0 
-      ? result.rows[0].description || 'No description'
+    const poolDescription = poolConfig 
+      ? poolConfig.description || 'No description'
       : 'No pool configuration found';
     
     res.json({ 
-      status: 'Docker Proxy server running (no auth)', 
+      status: 'Prisma-powered DHCP Manager running', 
       target: KEA_SERVER,
       timestamp: new Date().toISOString(),
       configuration: {
-        poolConfigSource: 'Database',
+        poolConfigSource: 'Prisma Database',
         poolRange: poolInfo,
         poolDescription: poolDescription,
         keaServer: KEA_SERVER
@@ -71,21 +62,22 @@ app.get('/health', async (req, res) => {
       features: {
         staticIPManagement: true,
         poolConfiguration: true,
-        database: 'PostgreSQL'
+        database: 'PostgreSQL with Prisma',
+        orm: 'Prisma'
       }
     });
   } catch (error) {
     console.error('Database error in health check:', error.message);
     
-    // Fallback to old behavior if database fails
+    // Fallback response if database fails
     res.json({ 
-      status: 'Docker Proxy server running (no auth)', 
+      status: 'Proxy server running (database error)', 
       target: KEA_SERVER,
       timestamp: new Date().toISOString(),
       configuration: {
-        poolConfigSource: 'Environment (fallback)',
-        poolRange: config.reservedPool?.range || 'Unknown',
-        poolDescription: 'Fallback to environment configuration',
+        poolConfigSource: 'Unavailable (database error)',
+        poolRange: 'Unknown',
+        poolDescription: 'Database connection failed',
         keaServer: KEA_SERVER
       },
       dockerInfo: {
@@ -93,90 +85,87 @@ app.get('/health', async (req, res) => {
         platform: require('os').platform()
       },
       features: {
-        staticIPManagement: true,
+        staticIPManagement: false,
         poolConfiguration: false,
-        database: 'PostgreSQL (connection failed)'
+        database: 'PostgreSQL (connection failed)',
+        orm: 'Prisma'
       },
-      error: 'Pool configuration database not available',
+      error: 'Database connection failed',
       fallback: true
     });
   }
 });
 
-// Updated reserved pool configuration endpoint to use database
+// Updated reserved pool configuration endpoint to use Prisma
 app.get('/config/reserved-pool', async (req, res) => {
-  console.log('Reserved pool configuration requested - checking database first');
+  console.log('Reserved pool configuration requested - checking Prisma database');
   
   try {
-    // Try to get from database first
-    const { Pool } = require('pg');
-    const pool = new Pool({
-      user: process.env.DB_USER || 'postgres',
-      host: process.env.DB_HOST || 'localhost',
-      database: process.env.DB_NAME || 'kea_dhcp',
-      password: process.env.DB_PASSWORD || 'postgres',
-      port: process.env.DB_PORT || 5432,
+    const poolConfig = await prisma.poolConfig.findFirst({
+      where: { isActive: true },
+      orderBy: { updatedAt: 'desc' }
     });
     
-    const client = await pool.connect();
-    const result = await client.query(
-      'SELECT HOST(start_ip) as start_ip, HOST(end_ip) as end_ip, description, created_at, updated_at FROM pool_config WHERE is_active = true ORDER BY updated_at DESC LIMIT 1'
-    );
-    client.release();
-    pool.end();
-    
-    if (result.rows.length > 0) {
-      const poolData = result.rows[0];
-      const startNum = poolData.start_ip.split('.').reduce((acc, octet) => (acc << 8) + parseInt(octet), 0) >>> 0;
-      const endNum = poolData.end_ip.split('.').reduce((acc, octet) => (acc << 8) + parseInt(octet), 0) >>> 0;
-      const total = Math.max(0, endNum - startNum + 1);
+    if (poolConfig) {
+      // Calculate total IPs
+      const startOctets = poolConfig.startIp.split('.').map(Number);
+      const endOctets = poolConfig.endIp.split('.').map(Number);
+      const total = (endOctets[3] - startOctets[3]) + 1;
       
-      console.log('Pool configuration retrieved from database:', poolData);
+      console.log('Pool configuration retrieved from Prisma database:', poolConfig);
       
       res.json({
         success: true,
         reservedPool: {
-          range: `${poolData.start_ip} - ${poolData.end_ip}`,
-          startIP: poolData.start_ip,
-          endIP: poolData.end_ip,
+          range: `${poolConfig.startIp} - ${poolConfig.endIp}`,
+          startIP: poolConfig.startIp,
+          endIP: poolConfig.endIp,
           total: total,
-          description: poolData.description,
-          source: 'database',
-          lastUpdated: poolData.updated_at,
-          created: poolData.created_at
+          description: poolConfig.description,
+          source: 'prisma-database',
+          lastUpdated: poolConfig.updatedAt,
+          created: poolConfig.createdAt
         },
         timestamp: new Date().toISOString()
       });
     } else {
-      // No database configuration, fall back to environment
-      console.log('No pool configuration in database, using environment fallback');
+      // No database configuration, use fallback
+      console.log('No pool configuration in Prisma database, using fallback');
       res.json({
         success: true,
         reservedPool: {
-          ...config.reservedPool,
-          source: 'environment-fallback',
+          range: '192.168.1.2 - 192.168.1.100',
+          startIP: '192.168.1.2',
+          endIP: '192.168.1.100',
+          total: 99,
+          description: 'Default fallback configuration',
+          source: 'fallback',
           lastUpdated: null,
           created: null
         },
         timestamp: new Date().toISOString(),
-        message: 'No database configuration found, using environment defaults'
+        message: 'No database configuration found, using fallback defaults'
       });
     }
   } catch (error) {
-    console.error('Database error, falling back to environment config:', error.message);
+    console.error('Prisma database error, using fallback config:', error.message);
     
-    // Database error, fall back to environment
+    // Database error, fall back to defaults
     res.json({
       success: true,
       reservedPool: {
-        ...config.reservedPool,
-        source: 'environment-fallback',
+        range: '192.168.1.2 - 192.168.1.100',
+        startIP: '192.168.1.2',
+        endIP: '192.168.1.100',
+        total: 99,
+        description: 'Emergency fallback configuration',
+        source: 'error-fallback',
         error: 'Database unavailable',
         lastUpdated: null,
         created: null
       },
       timestamp: new Date().toISOString(),
-      message: 'Database connection failed, using environment configuration'
+      message: 'Database connection failed, using emergency configuration'
     });
   }
 });
@@ -188,30 +177,52 @@ app.use('/api', staticIPRoutes);
 app.use('/api', poolConfigRoutes);
 
 // Test endpoint with enhanced information
-app.get('/test', (req, res) => {
-  res.json({ 
-    message: 'Docker proxy server is working (no auth)!',
-    requestFrom: req.ip,
-    headers: req.headers,
-    timestamp: new Date().toISOString(),
-    configuration: {
-      reservedPoolConfig: config.reservedPool,
-      staticIPSupport: true,
-      poolConfigSupport: true,
-      databaseEnabled: true
-    },
-    availableEndpoints: {
-      health: '/health',
-      test: '/test',
-      keaAPI: '/api/*',
-      staticIPs: '/api/static-ips',
-      poolConfig: '/api/pool-config',
-      reservedPoolLegacy: '/config/reserved-pool'
-    }
-  });
+app.get('/test', async (req, res) => {
+  try {
+    // Test database connection
+    await prisma.$queryRaw`SELECT 1`;
+    const dbStatus = 'Connected';
+    
+    // Get some stats
+    const staticIPCount = await prisma.staticIP.count();
+    const poolConfigCount = await prisma.poolConfig.count();
+    
+    res.json({ 
+      message: 'Prisma-powered proxy server is working!',
+      requestFrom: req.ip,
+      headers: req.headers,
+      timestamp: new Date().toISOString(),
+      database: {
+        status: dbStatus,
+        orm: 'Prisma',
+        staticIPs: staticIPCount,
+        poolConfigs: poolConfigCount
+      },
+      configuration: {
+        staticIPSupport: true,
+        poolConfigSupport: true,
+        databaseEnabled: true,
+        orm: 'Prisma'
+      },
+      availableEndpoints: {
+        health: '/health',
+        test: '/test',
+        keaAPI: '/api/*',
+        staticIPs: '/api/static-ips',
+        poolConfig: '/api/pool-config',
+        reservedPoolLegacy: '/config/reserved-pool'
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: 'Database connection failed',
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
 });
 
-// Proxy all /api requests to Kea (except our static IP and pool config routes)
+// Proxy all /api requests to Kea (except our custom routes)
 app.all('/api/*', async (req, res, next) => {
   // Skip Kea proxy for our custom routes
   if (req.path.startsWith('/api/static-ips') || req.path.startsWith('/api/pool-config')) {
@@ -313,7 +324,7 @@ app.all('*', (req, res) => {
     availableRoutes: {
       system: [
         'GET /health - System health check with database status',
-        'GET /test - Test endpoint with configuration info'
+        'GET /test - Test endpoint with database connection info'
       ],
       kea: [
         'POST /api - Kea DHCP API proxy (all commands)',
@@ -335,7 +346,7 @@ app.all('*', (req, res) => {
         'GET /api/pool-config/validate - Validate pool range'
       ],
       legacy: [
-        'GET /config/reserved-pool - Legacy reserved pool endpoint (database-aware)'
+        'GET /config/reserved-pool - Legacy reserved pool endpoint (Prisma-aware)'
       ]
     },
     features: {
@@ -343,20 +354,34 @@ app.all('*', (req, res) => {
       poolConfiguration: true,
       haStatus: true,
       database: 'PostgreSQL',
+      orm: 'Prisma',
       cors: true
     }
   });
 });
 
+// Graceful shutdown
+process.on('SIGINT', async () => {
+  console.log('🛑 Received SIGINT, shutting down gracefully...');
+  await prisma.$disconnect();
+  process.exit(0);
+});
+
+process.on('SIGTERM', async () => {
+  console.log('🛑 Received SIGTERM, shutting down gracefully...');
+  await prisma.$disconnect();
+  process.exit(0);
+});
+
 // Start server with enhanced logging
 app.listen(PORT, HOST, () => {
   console.log('='.repeat(80));
-  console.log(`🚀 Docker CORS Proxy server running on http://${HOST}:${PORT}`);
+  console.log(`🚀 Prisma-powered DHCP Manager running on http://${HOST}:${PORT}`);
   console.log(`📡 Accessible from host at: http://172.18.0.3:${PORT}`);
   console.log(`🔄 Proxying Kea requests to: ${KEA_SERVER}`);
-  console.log(`💾 Static IP management: PostgreSQL database enabled`);
-  console.log(`⚙️  Pool configuration: Database-managed (with environment fallback)`);
-  console.log(`🏊 Reserved Pool: ${config.reservedPool.range} (${config.reservedPool.total} IPs) [fallback]`);
+  console.log(`💾 Database: PostgreSQL with Prisma ORM`);
+  console.log(`📊 Static IP management: Enabled`);
+  console.log(`⚙️  Pool configuration: Database-managed`);
   console.log('');
   console.log('📍 Available endpoints:');
   console.log(`   🏥 Health check: http://172.18.0.3:${PORT}/health`);
@@ -367,11 +392,16 @@ app.listen(PORT, HOST, () => {
   console.log(`   🌐 Kea DHCP API: http://172.18.0.3:${PORT}/api`);
   console.log('');
   console.log('🔧 Features enabled:');
-  console.log('   ✅ Static IP Management');
-  console.log('   ✅ Pool Configuration');
+  console.log('   ✅ Static IP Management (Prisma)');
+  console.log('   ✅ Pool Configuration (Prisma)');
   console.log('   ✅ High Availability Status');
-  console.log('   ✅ PostgreSQL Database');
+  console.log('   ✅ PostgreSQL Database with Prisma ORM');
   console.log('   ✅ CORS Support');
   console.log('   ✅ Docker Integration');
+  console.log('');
+  console.log('🗄️  Database commands:');
+  console.log('   📋 View data: npm run db:studio');
+  console.log('   🔄 Reset database: npm run db:reset');
+  console.log('   🌱 Seed data: npm run db:seed');
   console.log('='.repeat(80));
 });

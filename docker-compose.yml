@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-kea_dhcp}
+      POSTGRES_USER: ${POSTGRES_USER:-keauser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-keapass}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - kea-network
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    restart: unless-stopped
+
+  backend:
+    build: ./kea-dhcp-backend
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-keauser}:${POSTGRES_PASSWORD:-keapass}@postgres:5432/${POSTGRES_DB:-kea_dhcp}?schema=public
+      KEA_SERVER: ${KEA_SERVER:-http://192.168.1.97:8000}
+      PROXY_PORT: ${PROXY_PORT:-3001}
+      PROXY_HOST: ${PROXY_HOST:-0.0.0.0}
+      NODE_ENV: ${NODE_ENV:-development}
+    ports:
+      - "${PROXY_PORT:-3001}:${PROXY_PORT:-3001}"
+    depends_on:
+      - postgres
+    networks:
+      - kea-network
+    volumes:
+      - ./kea-dhcp-backend:/app
+      - /app/node_modules
+      - /app/prisma/migrations
+    command: >
+      sh -c "echo 'Waiting for postgres...' &&
+             sleep 10 &&
+             npm run db:push && 
+             npm run db:seed && 
+             npm start"
+    restart: unless-stopped
+
+  frontend:
+    build: 
+      context: ./kea-dhcp-frontend
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:3001}
+    ports:
+      - "${FRONTEND_PORT:-5173}:80"
+    depends_on:
+      - backend
+    networks:
+      - kea-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+
+networks:
+  kea-network:
+    driver: bridge
