@@ -405,3 +405,4 @@ app.listen(PORT, HOST, () => {
   console.log('   🌱 Seed data: npm run db:seed');
   console.log('='.repeat(80));
 });
+
