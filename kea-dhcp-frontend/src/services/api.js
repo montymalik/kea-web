@@ -2,9 +2,7 @@
 import { findNextAvailableIP } from '../utils/utils';
 
 // Use Docker-accessible proxy server to avoid CORS issues
-const API_BASE = process.env.NODE_ENV === 'production'
-  ? '/api'
-  : 'http://localhost:3000/api';
+const API_BASE = '/api';
 
 // Common fetch configuration (no auth required)
 const fetchWithAuth = async (url, options = {}) => {
