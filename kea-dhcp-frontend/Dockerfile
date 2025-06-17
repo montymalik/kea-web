@@ -12,7 +12,7 @@ RUN npm run build
 FROM nginx:alpine
 COPY --from=builder /app/dist /usr/share/nginx/html
 
-# Create nginx config that properly maps all endpoints
+# Create nginx config that properly maps all endpoints with CORS support
 RUN echo 'server { \
     listen 80; \
     root /usr/share/nginx/html; \
@@ -31,6 +31,15 @@ RUN echo 'server { \
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; \
         proxy_connect_timeout 5s; \
         proxy_send_timeout 10s; \
+        add_header "Access-Control-Allow-Origin" "*" always; \
+        add_header "Access-Control-Allow-Methods" "GET, POST, OPTIONS, PUT, DELETE" always; \
+        add_header "Access-Control-Allow-Headers" "Origin, Content-Type, Accept, Authorization" always; \
+        if ($request_method = OPTIONS) { \
+            add_header "Access-Control-Max-Age" 1728000; \
+            add_header "Content-Type" "text/plain; charset=UTF-8"; \
+            add_header "Content-Length" 0; \
+            return 204; \
+        } \
     } \
     \
     # Map /api/test to backend /test \
@@ -41,6 +50,15 @@ RUN echo 'server { \
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; \
         proxy_connect_timeout 5s; \
         proxy_send_timeout 10s; \
+        add_header "Access-Control-Allow-Origin" "*" always; \
+        add_header "Access-Control-Allow-Methods" "GET, POST, OPTIONS, PUT, DELETE" always; \
+        add_header "Access-Control-Allow-Headers" "Origin, Content-Type, Accept, Authorization" always; \
+        if ($request_method = OPTIONS) { \
+            add_header "Access-Control-Max-Age" 1728000; \
+            add_header "Content-Type" "text/plain; charset=UTF-8"; \
+            add_header "Content-Length" 0; \
+            return 204; \
+        } \
     } \
     \
     # Proxy all /api/* (except health and test) to backend /api/* \
@@ -53,6 +71,15 @@ RUN echo 'server { \
         proxy_connect_timeout 5s; \
         proxy_send_timeout 30s; \
         proxy_read_timeout 30s; \
+        add_header "Access-Control-Allow-Origin" "*" always; \
+        add_header "Access-Control-Allow-Methods" "GET, POST, OPTIONS, PUT, DELETE" always; \
+        add_header "Access-Control-Allow-Headers" "Origin, Content-Type, Accept, Authorization" always; \
+        if ($request_method = OPTIONS) { \
+            add_header "Access-Control-Max-Age" 1728000; \
+            add_header "Content-Type" "text/plain; charset=UTF-8"; \
+            add_header "Content-Length" 0; \
+            return 204; \
+        } \
     } \
     \
     # Map /config to backend /config \
@@ -63,8 +90,18 @@ RUN echo 'server { \
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; \
         proxy_connect_timeout 5s; \
         proxy_send_timeout 10s; \
+        add_header "Access-Control-Allow-Origin" "*" always; \
+        add_header "Access-Control-Allow-Methods" "GET, POST, OPTIONS, PUT, DELETE" always; \
+        add_header "Access-Control-Allow-Headers" "Origin, Content-Type, Accept, Authorization" always; \
+        if ($request_method = OPTIONS) { \
+            add_header "Access-Control-Max-Age" 1728000; \
+            add_header "Content-Type" "text/plain; charset=UTF-8"; \
+            add_header "Content-Length" 0; \
+            return 204; \
+        } \
     } \
 }' > /etc/nginx/conf.d/default.conf
 
 EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]
+
