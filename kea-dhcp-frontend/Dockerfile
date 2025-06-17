@@ -12,7 +12,7 @@ RUN npm run build
 FROM nginx:alpine
 COPY --from=builder /app/dist /usr/share/nginx/html
 
-# Create a simple working nginx config
+# Create nginx config that properly maps all endpoints
 RUN echo 'server { \
     listen 80; \
     root /usr/share/nginx/html; \
@@ -23,36 +23,46 @@ RUN echo 'server { \
         try_files $uri $uri/ /index.html; \
     } \
     \
-    # Proxy /api/health to backend /health \
+    # Map /api/health to backend /health \
     location = /api/health { \
         proxy_pass http://backend:3001/health; \
         proxy_set_header Host $host; \
         proxy_set_header X-Real-IP $remote_addr; \
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; \
+        proxy_connect_timeout 5s; \
+        proxy_send_timeout 10s; \
     } \
     \
-    # Proxy /api/test to backend /test \
+    # Map /api/test to backend /test \
     location = /api/test { \
         proxy_pass http://backend:3001/test; \
         proxy_set_header Host $host; \
         proxy_set_header X-Real-IP $remote_addr; \
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; \
+        proxy_connect_timeout 5s; \
+        proxy_send_timeout 10s; \
     } \
     \
-    # Proxy all other /api/* to backend /api/* \
+    # Proxy all /api/* (except health and test) to backend /api/* \
     location /api/ { \
         proxy_pass http://backend:3001/api/; \
         proxy_set_header Host $host; \
         proxy_set_header X-Real-IP $remote_addr; \
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; \
+        proxy_set_header X-Forwarded-Proto $scheme; \
+        proxy_connect_timeout 5s; \
+        proxy_send_timeout 30s; \
+        proxy_read_timeout 30s; \
     } \
     \
-    # Proxy /config to backend /config \
+    # Map /config to backend /config \
     location /config/ { \
         proxy_pass http://backend:3001/config/; \
         proxy_set_header Host $host; \
         proxy_set_header X-Real-IP $remote_addr; \
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; \
+        proxy_connect_timeout 5s; \
+        proxy_send_timeout 10s; \
     } \
 }' > /etc/nginx/conf.d/default.conf
 
