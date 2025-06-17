@@ -1,5 +1,12 @@
-# Multi-stage build for better optimization
-FROM node:18-alpine AS builder
+# Use Debian-based Node.js for better Prisma compatibility
+FROM node:18-slim
+
+# Install required system dependencies
+RUN apt-get update && apt-get install -y \
+    openssl \
+    ca-certificates \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -7,36 +14,17 @@ WORKDIR /app
 COPY package*.json ./
 COPY prisma ./prisma/
 
-# Install all dependencies (including dev dependencies for build)
-RUN npm install
+# Install dependencies
+RUN npm install --omit=dev
 
 # Generate Prisma client
 RUN npx prisma generate
-
-# Production stage
-FROM node:18-alpine AS production
-
-WORKDIR /app
-
-# Copy package files
-COPY package*.json ./
-COPY prisma ./prisma/
-
-# Install only production dependencies
-RUN npm install --omit=dev && npm cache clean --force
-
-# Copy generated Prisma client from builder stage
-COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
-COPY --from=builder /app/node_modules/@prisma/client ./node_modules/@prisma/client
 
 # Copy source code
 COPY . .
 
 # Create non-root user for security
-RUN addgroup -g 1001 -S nodejs && \
-    adduser -S nodeuser -u 1001
-
-# Change ownership of app directory
+RUN groupadd -r nodejs && useradd -r -g nodejs nodeuser
 RUN chown -R nodeuser:nodejs /app
 USER nodeuser
 

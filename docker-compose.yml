@@ -14,6 +14,11 @@ services:
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-keauser} -d ${POSTGRES_DB:-kea_dhcp}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   backend:
     build: ./kea-dhcp-backend
@@ -22,30 +27,31 @@ services:
       KEA_SERVER: ${KEA_SERVER:-http://192.168.1.97:8000}
       PROXY_PORT: ${PROXY_PORT:-3001}
       PROXY_HOST: ${PROXY_HOST:-0.0.0.0}
-      NODE_ENV: ${NODE_ENV:-development}
+      NODE_ENV: ${NODE_ENV:-production}
     ports:
       - "${PROXY_PORT:-3001}:${PROXY_PORT:-3001}"
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     networks:
       - kea-network
     volumes:
       - ./kea-dhcp-backend:/app
       - /app/node_modules
       - /app/prisma/migrations
-    command: >
-      sh -c "echo 'Waiting for postgres...' &&
-             sleep 10 &&
-             npm run db:push && 
-             npm run db:seed && 
-             npm start"
     restart: unless-stopped
+    command: >
+      sh -c "echo 'Waiting for database to be ready...' &&
+             sleep 5 &&
+             echo 'Running database migrations...' &&
+             npx prisma db push &&
+             echo 'Seeding database...' &&
+             npm run db:seed &&
+             echo 'Starting server...' &&
+             npm start"
 
   frontend:
-    build: 
-      context: ./kea-dhcp-frontend
-      args:
-        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:3001}
+    build: ./kea-dhcp-frontend
     ports:
       - "${FRONTEND_PORT:-5173}:80"
     depends_on:
