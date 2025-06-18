@@ -26,7 +26,7 @@ services:
     build: ./kea-dhcp-backend
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-keauser}:${POSTGRES_PASSWORD:-keapass}@postgres:5432/${POSTGRES_DB:-kea_dhcp}?schema=public
-      KEA_SERVER: ${KEA_SERVER:-http://192.168.1.97:8000}
+      KEA_SERVER: ${KEA_SERVER:-http://localhost:8000}
       PROXY_PORT: ${PROXY_PORT:-3001}
       PROXY_HOST: ${PROXY_HOST:-0.0.0.0}
       NODE_ENV: ${NODE_ENV:-production}

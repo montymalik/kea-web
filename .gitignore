@@ -3,8 +3,6 @@
 # dependencies
 /kea-dhcp-frontend/node_modules
 /kea-dhcp-backend/node_modules
-/kea-dhcp-frontend/package-json.lock
-/kea-dhcp-backend/package-json.lock
 /.pnp
 .pnp.*
 .yarn/*
@@ -29,7 +27,7 @@
 npm-debug.log*
 
 # env files (can opt-in for committing if needed)
-.env*
+.env
 /kea-dhcp-backend/.env
 
 # vercel
